@@ -1,0 +1,447 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { DockState, IslandEvent, IslandSnapshot, MediaState, PanelId } from '@shared/types'
+import { IslaAvatar, type IslaAnimation } from './avatar'
+import { Icon, cleanErr } from './components/ui'
+import { UsageRings } from './components/Rings'
+import { MediaPill, isPlaying } from './components/Media'
+import { HomePanel } from './panels/Home'
+import { AgentPanel } from './panels/Agent'
+import { GitPanel } from './panels/Git'
+import { MailPanel } from './panels/Mail'
+import { UsagePanel } from './panels/Usage'
+import { SettingsPanel } from './panels/Settings'
+import { SecurityPanel } from './panels/Security'
+
+type Mode = 'compact' | 'peek' | 'expanded'
+
+const COMPACT_H = 44
+const RING = 38
+type Notice = Extract<IslandEvent, { type: 'notify' }>
+
+const TABS: { id: PanelId; icon: string; label: string }[] = [
+  { id: 'home', icon: 'home', label: 'Home' },
+  { id: 'agent', icon: 'agent', label: 'Agent' },
+  { id: 'git', icon: 'git', label: 'Git' },
+  { id: 'mail', icon: 'mail', label: 'Mail' },
+  { id: 'usage', icon: 'usage', label: 'AI usage' },
+  { id: 'settings', icon: 'settings', label: 'Settings' },
+  { id: 'security', icon: 'shield', label: 'Security' }
+]
+
+const REACTION: Record<Notice['kind'], IslaAnimation> = {
+  otp: 'excited',
+  mail: 'happy',
+  suggest: 'thinking',
+  commit: 'happy',
+  'run-done': 'success',
+  'run-error': 'error',
+  security: 'alert',
+  info: 'surprised'
+}
+
+export function App() {
+  const [snap, setSnap] = useState<IslandSnapshot | null>(null)
+  const [mode, setMode] = useState<Mode>('compact')
+  const [panel, setPanel] = useState<PanelId>('home')
+  const [pinned, setPinned] = useState(false)
+  const [notice, setNotice] = useState<Notice | null>(null)
+  const [reaction, setReaction] = useState<IslaAnimation | null>(null)
+  const [typing, setTyping] = useState(false)
+  const [mailUid, setMailUid] = useState<string | null>(null)
+  const [focusRun, setFocusRun] = useState<string | null>(null)
+  const [peekMsg, setPeekMsg] = useState<string | null>(null)
+  const [lastActivity, setLastActivity] = useState(Date.now())
+  const [now, setNow] = useState(Date.now())
+  const collapseTimer = useRef<number>(0)
+  const noticeTimer = useRef<number>(0)
+  const reactionTimer = useRef<number>(0)
+  const islandRef = useRef<HTMLDivElement>(null)
+  const wasAsleep = useRef(false)
+  const [dock, setDock] = useState<DockState | null>(null)
+  const [media, setMedia] = useState<MediaState | null>(null)
+  const mediaModeRef = useRef(false)
+  const [dragging, setDragging] = useState(false)
+  const [landing, setLanding] = useState(false)
+  const draggingRef = useRef(false)
+  const press = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
+  const hoverTimer = useRef<number>(0)
+  const interactive = useRef(false)
+  const setInteractive = (v: boolean) => {
+    if (interactive.current === v) return
+    interactive.current = v
+    window.island.setInteractive(v)
+  }
+
+  const react = useCallback((a: IslaAnimation, ms = 3500) => {
+    setReaction(a)
+    window.clearTimeout(reactionTimer.current)
+    reactionTimer.current = window.setTimeout(() => setReaction(null), ms)
+  }, [])
+
+  useEffect(() => {
+    void window.island.getSnapshot().then(s => {
+      setSnap(s)
+      setDock(s.settings.dock)
+      setMedia(s.media)
+    })
+    const off = window.island.onEvent(e => {
+      if (e.type === 'snapshot') setSnap(e.snapshot)
+      else if (e.type === 'media') setMedia(e.media)
+      else if (e.type === 'dock') {
+        // Landed on an edge (or hidden/shown): new layout + a little squash-and-stretch.
+        setDock(e.dock)
+        draggingRef.current = false
+        setDragging(false)
+        interactive.current = false
+        setLanding(true)
+        window.setTimeout(() => setLanding(false), 650)
+      }
+      else if (e.type === 'run-output') {
+        setSnap(s =>
+          s ? { ...s, runs: s.runs.map(r => (r.id === e.id ? { ...r, output: r.output + e.chunk } : r)) } : s
+        )
+      } else if (e.type === 'notify') {
+        setNotice(e)
+        react(REACTION[e.kind])
+        setLastActivity(Date.now())
+        setMode(m => (m === 'expanded' ? m : 'peek'))
+        window.clearTimeout(noticeTimer.current)
+        noticeTimer.current = window.setTimeout(() => {
+          setNotice(null)
+          setMode(m => (m === 'peek' ? 'compact' : m))
+        }, e.kind === 'otp' ? 20_000 : e.kind === 'mail' || e.kind === 'suggest' || e.kind === 'commit' ? 15_000 : 6000)
+      }
+    })
+    const t = window.setInterval(() => setNow(Date.now()), 15_000)
+    return () => {
+      off()
+      window.clearInterval(t)
+    }
+  }, [react])
+
+  // Click-through: the window only captures the mouse while the pointer is over the island itself.
+  const enter = () => {
+    setInteractive(true)
+    window.clearTimeout(collapseTimer.current)
+    setLastActivity(Date.now())
+    // Hover opens after a short pause, so a quick grab-and-drag doesn't expand it.
+    // With media showing, the pill holds the controls — open it by clicking instead of hovering.
+    if (mode === 'compact' && !dock?.hidden && !mediaModeRef.current) {
+      window.clearTimeout(hoverTimer.current)
+      hoverTimer.current = window.setTimeout(() => {
+        if (!press.current && !draggingRef.current) setMode('expanded')
+      }, 450)
+    }
+  }
+  const leave = () => {
+    window.clearTimeout(hoverTimer.current)
+    if (draggingRef.current) return
+    setInteractive(false)
+    if (pinned || typing) return
+    collapseTimer.current = window.setTimeout(() => setMode(notice ? 'peek' : 'compact'), 700)
+  }
+
+  // ---- drag to any edge
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest('button, input, textarea, select, a')) return
+    const r = islandRef.current!.getBoundingClientRect()
+    press.current = { x: e.screenX, y: e.screenY, ox: e.clientX - r.left, oy: e.clientY - r.top }
+    try {
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    } catch {
+      /* capture is best-effort */
+    }
+  }
+  const onPointerMove = (e: React.PointerEvent) => {
+    const p = press.current
+    if (!p || draggingRef.current) return
+    if (Math.hypot(e.screenX - p.x, e.screenY - p.y) < 6) return
+    window.clearTimeout(hoverTimer.current)
+    draggingRef.current = true
+    setDragging(true)
+    setMode('compact')
+    // While dragging the pill is always horizontal and compact.
+    const w = pillWidth
+    window.island.dragStart(w, COMPACT_H, Math.min(Math.max(p.ox, 20), w - 20), Math.min(p.oy, COMPACT_H - 6))
+  }
+  const onPointerUp = () => {
+    const p = press.current
+    press.current = null
+    if (draggingRef.current) {
+      window.island.dragEnd()
+      return
+    }
+    if (p && mode === 'compact') {
+      window.clearTimeout(hoverTimer.current)
+      setMode('expanded')
+    }
+  }
+
+  const running = snap?.runs.filter(r => r.status === 'running') ?? []
+  const pending = snap?.runs.filter(r => r.status === 'pending-approval') ?? []
+  const locked = !!snap?.security.locked
+  const idleMin = (now - lastActivity) / 60_000
+
+  const baseAnimation: IslaAnimation = useMemo(() => {
+    if (locked) return 'sleeping'
+    if (pending.length) return 'suspicious'
+    if (running.length) return running.some(r => r.title.startsWith('Predict')) ? 'thinking' : 'working'
+    if (typing) return 'listening'
+    // Music on → Isla dances (sways to the beat, happy squints, little jumps).
+    if (isPlaying(media)) return 'dancing'
+    if (mode === 'expanded' && panel === 'git') return 'searching'
+    if (mode === 'expanded') return 'idle'
+    if (snap?.git?.conflicted) return 'confused'
+    if (idleMin > 20) return 'sleeping'
+    if (idleMin > 8) return 'drowsy'
+    return 'idle'
+  }, [locked, pending.length, running, typing, mode, panel, snap?.git?.conflicted, idleMin, media?.status])
+
+  useEffect(() => {
+    if (baseAnimation === 'sleeping') wasAsleep.current = true
+    else if (wasAsleep.current) {
+      wasAsleep.current = false
+      react('waking', 2200)
+    }
+  }, [baseAnimation, react])
+
+  const animation = reaction ?? baseAnimation
+
+  if (!snap || !dock) return null
+
+  const edge = dock.edge
+  const vertical = (edge === 'left' || edge === 'right') && !dragging
+  const idle = !locked && !running.length && !pending.length && !snap.otps.length
+  const mediaMode = !!snap.settings.mediaControls && !!media && (media.status === 'Playing' || media.status === 'Paused') && idle
+  mediaModeRef.current = mediaMode
+  // Usage rings stay visible next to the music.
+  const rings = idle ? snap.limits : []
+  const pillWidth = (mediaMode ? 470 : 250) + rings.length * RING + 26
+  const compactStyle = vertical ? { height: (mediaMode ? 232 : 84) + rings.length * (RING + 4) + 30 } : { width: pillWidth }
+  const showTab = dock.hidden && !dragging && !(mode === 'peek' && notice)
+  const hideArrow = { top: 'up', bottom: 'down', left: 'left', right: 'right' }[edge]
+  const showArrow = { top: 'down', bottom: 'up', left: 'right', right: 'left' }[edge]
+
+  const git = snap.git
+  const changes = git ? git.staged + git.modified + git.untracked : 0
+  const status = locked
+    ? 'Paused — kill switch'
+    : running.length
+      ? `Working · ${running[0].title}`
+      : pending.length
+        ? `${pending.length} awaiting approval`
+        : snap.otps.length
+          ? `Code ready · ${snap.otps[0].from}`
+          : snap.activity?.signIn && snap.mailStatus === 'watching'
+            ? 'Watching for your sign-in code…'
+            : snap.inbox.some(m => m.unread) && snap.activity?.kind !== 'ide'
+              ? `${snap.inbox.filter(m => m.unread).length} unread mail`
+              : git?.isRepo
+            ? `${git.branch ?? 'HEAD'}${changes ? ` · ${changes} changed` : ''}`
+            : 'Agentic Island'
+
+  const open = (p: PanelId) => {
+    setPanel(p)
+    setMode('expanded')
+  }
+  /** One click on a proactive suggestion runs it (read-only) and shows the answer on Home. */
+  const doIt = async (id: string) => {
+    try {
+      const run = await window.island.doSuggestion(id)
+      setFocusRun(run.id)
+      setNotice(null)
+      open('home')
+    } catch (e) {
+      setPeekMsg(cleanErr(e))
+    }
+  }
+  const commitNow = async () => {
+    const p = snap?.proposal
+    if (!p) return
+    setPeekMsg('Committing…')
+    const r = await window.island.commit(p.message, true, p.diffHash)
+    setPeekMsg(r.message)
+    window.setTimeout(() => {
+      setPeekMsg(null)
+      setNotice(null)
+      setMode(m => (m === 'peek' ? 'compact' : m))
+    }, r.ok ? 4000 : 8000)
+  }
+
+  const openMail = (uid: string) => {
+    setMailUid(uid)
+    open('mail')
+  }
+
+  return (
+    <div className={`stage dock-${edge} ${dragging ? 'dragging' : ''} ${landing ? 'landing' : ''}`}>
+      {showTab ? (
+        <div
+          className="island tab"
+          role="button"
+          aria-label="Show Agentic Island"
+          title="Show Isla"
+          onMouseEnter={() => setInteractive(true)}
+          onMouseLeave={() => setInteractive(false)}
+          onClick={() => window.island.setHidden(false)}
+        >
+          <Icon name="chevron" size={14} className={`chev-${showArrow}`} />
+          {pending.length > 0 && <i className="tab-dot orange" />}
+        </div>
+      ) : (
+      <div
+        ref={islandRef}
+        className={`island ${mode} ${locked ? 'locked' : ''} ${vertical ? 'vertical' : ''}`}
+        style={mode === 'compact' ? compactStyle : undefined}
+        onMouseEnter={enter}
+        onMouseLeave={leave}
+        onMouseMove={() => setInteractive(true)}
+        onKeyDown={() => setLastActivity(Date.now())}
+      >
+        {mode === 'compact' && (
+          <div className="compact-row" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
+            <IslaAvatar animation={animation} size={30} ariaLabel={`Isla is ${animation}`} />
+            {mediaMode && media ? (
+              <>
+                <MediaPill m={media} vertical={vertical} />
+                <UsageRings limits={rings} size={RING - 6} />
+              </>
+            ) : (
+            <>
+            {!vertical && <span className="compact-text">{status}</span>}
+            {vertical && rings.length === 0 && <span className="compact-spacer" />}
+            <UsageRings limits={rings} size={RING - 6} />
+            {!vertical && !rings.length && snap.screen && !snap.screen.skipped && !locked && (
+              <span className="watching" title={`Reading ${snap.screen.app} on-device`}>
+                <Icon name="eye" size={13} />
+              </span>
+            )}
+            <span className={`dot ${locked ? 'red' : running.length ? 'green pulse' : pending.length ? 'orange pulse' : snap.otps.length ? 'blue' : ''}`} />
+            </>
+            )}
+            {/* Tuck away straight from the pill — no need to open the island first. */}
+            <button
+              className="pill-hide"
+              title="Tuck into the edge"
+              aria-label="Tuck into the edge"
+              onClick={() => {
+                setInteractive(false)
+                window.island.setHidden(true)
+              }}
+            >
+              <Icon name="chevron" size={13} className={`chev-${hideArrow}`} />
+            </button>
+          </div>
+        )}
+
+        {mode === 'peek' && notice && (
+          <div className="peek-row">
+            <IslaAvatar animation={animation} size={52} />
+            <div className="peek-text">
+              <strong>{notice.title}</strong>
+              <span className={notice.kind === 'otp' ? 'otp-inline' : ''}>{peekMsg ?? notice.body}</span>
+            </div>
+            {notice.kind === 'suggest' && notice.suggestionId ? (
+              <div className="peek-actions">
+                <button className="btn primary round" onClick={() => void doIt(notice.suggestionId!)}>
+                  Do it
+                </button>
+                <button className="icon-btn" title="Not now" onClick={() => void window.island.dismissSuggestion(notice.suggestionId!).then(() => setNotice(null))}>
+                  <Icon name="close" size={13} />
+                </button>
+              </div>
+            ) : notice.kind === 'commit' && snap.proposal ? (
+              <div className="peek-actions">
+                {snap.proposal.ok && !snap.proposal.secrets.length && (
+                  <button className="btn green round" disabled={!!peekMsg} onClick={() => void commitNow()}>
+                    <Icon name="push" size={13} /> Commit & push
+                  </button>
+                )}
+                <button className="btn ghost round" onClick={() => open('git')}>
+                  Details
+                </button>
+              </div>
+            ) : notice.kind === 'mail' && notice.uid ? (
+              <button className="btn primary round" onClick={() => openMail(notice.uid!)}>
+                Read
+              </button>
+            ) : notice.kind === 'otp' && snap.otps[0] ? (
+              <button className="btn primary round" onClick={() => void window.island.copyOtp(snap.otps[0].id).then(() => setNotice(null))}>
+                <Icon name="copy" /> Copy
+              </button>
+            ) : (
+              <button className="btn ghost round" onClick={() => open(notice.kind === 'security' ? 'security' : 'agent')}>
+                Open
+              </button>
+            )}
+          </div>
+        )}
+
+        {mode === 'expanded' && (
+          <div className="expanded">
+            <header className="ex-head" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
+              <IslaAvatar animation={animation} size={46} />
+              <div className="ex-title" title="Drag to move Isla to any screen edge">
+                <strong>Isla</strong>
+                <span>{status}</span>
+              </div>
+              <nav className="tabs" aria-label="Panels">
+                {TABS.map(t => (
+                  <button
+                    key={t.id}
+                    className={`tab ${panel === t.id ? 'active' : ''}`}
+                    title={t.label}
+                    aria-label={t.label}
+                    onClick={() => {
+                      if (t.id === 'mail') setMailUid(null)
+                      setPanel(t.id)
+                    }}
+                  >
+                    <Icon name={t.icon} size={17} />
+                    {t.id === 'agent' && pending.length > 0 && <i className="badge">{pending.length}</i>}
+                    {t.id === 'mail' && (snap.otps.length > 0 || snap.inbox.some(m => m.unread)) && (
+                      <i className="badge blue">{snap.otps.length || snap.inbox.filter(m => m.unread).length}</i>
+                    )}
+                  </button>
+                ))}
+              </nav>
+              <button className={`icon-btn ${pinned ? 'active' : ''}`} title={pinned ? 'Unpin' : 'Keep open'} onClick={() => setPinned(p => !p)}>
+                <Icon name="pin" />
+              </button>
+              <button
+                className="icon-btn"
+                title="Tuck into the edge"
+                onClick={() => {
+                  setMode('compact')
+                  setInteractive(false)
+                  window.island.setHidden(true)
+                }}
+              >
+                <Icon name="chevron" size={15} className={`chev-${hideArrow}`} />
+              </button>
+              {locked ? (
+                <button className="btn green round sm" onClick={() => void window.island.resume()}>
+                  Resume
+                </button>
+              ) : (
+                <button className="kill" title={`Kill switch (${snap.security.killShortcut})`} onClick={() => void window.island.killSwitch()}>
+                  <Icon name="stop" size={14} />
+                </button>
+              )}
+            </header>
+            <main className="ex-body">
+              {panel === 'home' && <HomePanel snap={snap} open={open} onTyping={setTyping} openMail={openMail} focusRun={focusRun} media={snap.settings.mediaControls ? media : null} />}
+              {panel === 'agent' && <AgentPanel snap={snap} />}
+              {panel === 'git' && <GitPanel snap={snap} />}
+              {panel === 'mail' && <MailPanel key={mailUid ?? 'inbox'} snap={snap} open={open} initialUid={mailUid} />}
+              {panel === 'usage' && <UsagePanel limits={snap.limits} />}
+              {panel === 'settings' && <SettingsPanel snap={snap} onTyping={setTyping} />}
+              {panel === 'security' && <SecurityPanel snap={snap} />}
+            </main>
+          </div>
+        )}
+      </div>
+      )}
+    </div>
+  )
+}
