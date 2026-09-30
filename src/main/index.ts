@@ -45,7 +45,6 @@ import { ContextWatcher } from './context'
 import { MediaWatcher } from './media'
 import { ScreenReader } from './screen'
 import { InsightEngine, redactScreen } from './insight'
-import { devShot } from './devshot' // TEMP-SHOT
 
 const KILL_SHORTCUT = 'Control+Alt+Shift+K'
 const TOGGLE_SHORTCUT = 'Control+Alt+Space'
@@ -855,7 +854,6 @@ function createWindow(): void {
     if (!dragTimer && !animTimer) win?.setBounds(dockBounds(getSettings().dock))
   })
 
-  if (process.env.ISLAND_SHOT && !app.isPackaged) devShot(win) // TEMP-SHOT
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else void win.loadFile(join(__dirname, '../renderer/index.html'))
 }

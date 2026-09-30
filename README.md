@@ -10,7 +10,8 @@ A macOS-style **Dynamic Island for Windows** with a proactive AI assistant insid
 - A black pill **flush against the edge of the screen**, top-center by default. Hover or click it to open the full panel.
 - **Drag it to any edge:** top, bottom, left or right. If you let go away from an edge, it **glides to the nearest edge** with a bouncy, macOS-style landing. On the left and right edges it becomes a vertical pill. The position is remembered.
 - **Tuck it away:** the small arrow at the end of the pill (or in the panel header) hides Isla into a tiny arrow tab on the edge. Click the tab to bring it back.
-- **Peeks:** when something happens (a code arrives, a task finishes, a suggestion is ready, your changes are ready to commit), the island briefly grows with a one-click button, then shrinks back.
+- **Peeks:** when something happens (a code arrives, a task finishes, a suggestion is ready, your changes are ready to commit), the island briefly grows with a one-click button, then folds back after a few seconds. Isla's face matches the moment: happy for mail, surprised for errors, thinking for ideas.
+- **✨ chip:** suggestions you didn't act on stay behind a small ✨ button on the pill. Click it to bring them back one by one.
 - **Isla's face** reacts to everything: she sleeps when you're away, works while an agent runs, looks suspicious while a task waits for approval, gets excited when a code arrives, and **dances when music plays** 🎉.
 
 ### 🤖 Uses the AI agents already on your PC
@@ -32,6 +33,8 @@ The Home box has two modes:
 | You type | What happens |
 | --- | --- |
 | "hi", "thanks", "help" | Isla answers instantly: no AI, no tokens |
+| "translate to English: …", "… convert to english", "translate into Sinhala: …" | Cheap translation (~1k tokens) with **Copy** / **Paste into app** |
+| "summarize this", "reply to this", "what does this say" | Uses the text on your screen, cheaply |
 | "read my last mail", "any unread emails?", "copy my code" | Answered locally from your inbox, no AI |
 | A question ("what does this file do?", "explain this error") | Runs **immediately and read-only**. Pressing *Ask* is your approval. |
 | A change request ("fix…", "add…", "refactor…") | Uses the agent's edit mode, and shows an **approval card** first |
@@ -46,6 +49,10 @@ Answers appear right on Home, with **Copy answer**.
    - an email open in the browser → *Summarize this email* / *Draft a reply* (no inbox setup needed)
    - a long web page → *Summarize this page*
    - Word or a PDF → *Proofread*
+   - **Teams / WhatsApp / Slack** (app or browser) → *Suggest a reply* to the latest message, in the same language
+   - lots of non-English text (Sinhala, Tamil, Hindi…) → *Translate to English*
+
+   These everyday text jobs run through the lean Haiku call, about 1k tokens (~/usr/bin/bash.003) each, not the full coding agent. The answer gets **Copy** and **Paste into WhatsApp/Teams/Gmail…**: Isla switches back to that app and pastes it into the box, and **you press Enter to send**. Isla never sends messages on its own.
 3. When the screen stays still for a moment, a **cheap model** (Haiku by default) looks at a short, **redacted** text snippet and suggests one next step. The island pops up with **Do it**. Each check is about **1k tokens, roughly $0.003**, capped at **10 per hour** (you can change this).
 4. It notices context from the window title:
    - on a sign-in page, it watches for your code
