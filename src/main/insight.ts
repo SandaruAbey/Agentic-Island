@@ -8,7 +8,7 @@ import { redactCodes } from './mail'
 
 const SCREEN_EVERY_MS = 20_000
 const STABLE_BEFORE_AI_MS = 12_000
-const CHANGES_SETTLE_MS = 45_000
+const CHANGES_SETTLE_MS = 90_000 // 1.5 minutes
 const PEEK_COOLDOWN_MS = 4 * 60_000
 
 const ERROR_LINE =
