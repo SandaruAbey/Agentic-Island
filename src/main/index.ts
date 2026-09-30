@@ -45,6 +45,7 @@ import { ContextWatcher } from './context'
 import { MediaWatcher } from './media'
 import { ScreenReader } from './screen'
 import { InsightEngine, redactScreen } from './insight'
+import { scanInstalledApps } from './apps'
 
 const KILL_SHORTCUT = 'Control+Alt+Shift+K'
 const TOGGLE_SHORTCUT = 'Control+Alt+Space'
@@ -179,7 +180,9 @@ async function queueRun(req: RunRequest, extra: { screen?: string; screenApp?: s
     return run
   }
   // Optional convenience: read-only General questions without private data can skip the approval card.
-  if (ctx === 'general' && !hasMail && getSettings().assistant.autoApproveGeneral) agents.approve(run.id, security.locked)
+  // However, if web approval is required and the run has web access, always show the approval card.
+  const webApproval = getSettings().assistant.webApprovalRequired && run.allowWeb
+  if (ctx === 'general' && !hasMail && !webApproval && getSettings().assistant.autoApproveGeneral) agents.approve(run.id, security.locked)
   return run
 }
 
@@ -808,6 +811,18 @@ function registerIpc(): void {
   handle('security:kill', () => killSwitch('Island button'))
   handle('security:resume', () => resume())
   handle('security:shutdown', () => shutdown())
+
+  // ---- App permissions ----
+  handle('apps:scan', () => scanInstalledApps())
+  handle('apps:set-permission', (process: string, name: string, allowed: boolean) => {
+    const s = getSettings()
+    const proc = String(process).toLowerCase().slice(0, 60)
+    const label = String(name).slice(0, 80)
+    const perms = [...s.appPermissions.filter(p => p.process !== proc), { process: proc, name: label, allowed: allowed === true }]
+    replaceSettings({ ...s, appPermissions: perms })
+    audit('apps.permission', `${label} (${proc}): ${allowed ? 'allowed' : 'blocked'}`)
+    broadcastSoon()
+  })
 }
 
 // ---------------------------------------------------------------- window + tray

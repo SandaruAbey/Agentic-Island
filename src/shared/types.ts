@@ -52,6 +52,8 @@ export interface UsageLimitConfig {
   claudeWeekly: number
   codexDaily: number
   codexWeekly: number
+  antigravityDaily: number
+  antigravityWeekly: number
   /** 0 = Sunday … 6 = Saturday. */
   weekStartDay: number
   /** Show real Claude plan usage (session + weekly) using Claude Code's local sign-in. */
@@ -68,7 +70,7 @@ export interface UsageRing {
 }
 
 export interface AiLimit {
-  id: 'claude' | 'codex'
+  id: 'claude' | 'codex' | 'antigravity'
   label: string
   color: string
   /** Inner ring: today (or Codex's 5-hour window when it reports one). */
@@ -99,6 +101,23 @@ export interface MediaState {
   thumbnail: string | null
 }
 
+/** An installed application detected on the PC. */
+export interface InstalledApp {
+  name: string
+  process: string
+  path: string | null
+}
+
+/** Per-app permission for screen reading. */
+export interface AppPermission {
+  /** Process name (lowercase). */
+  process: string
+  /** Display name. */
+  name: string
+  /** Whether Isla is allowed to read this app's screen content. */
+  allowed: boolean
+}
+
 export interface Settings {
   /** Your own Google Cloud "Desktop app" OAuth client (only needed if the build doesn't bundle one). */
   google: { clientId: string; clientSecret: string }
@@ -124,6 +143,8 @@ export interface Settings {
     llmPredictions: boolean
   }
   launchAtLogin: boolean
+  /** Per-app screen reading permissions. Apps not listed follow the default (allowed). */
+  appPermissions: AppPermission[]
   assistant: {
     /** Which agent answers General (non-coding) questions. 'auto' = active provider if it can run headless, else the first installed one. */
     provider: ProviderId | 'auto'
@@ -143,6 +164,8 @@ export interface Settings {
     backgroundModel: string
     /** Review finished changes and offer "Commit & push". */
     autoReviewCommits: boolean
+    /** Always ask user permission before any web-reaching operation (fetch, search). */
+    webApprovalRequired: boolean
   }
 }
 
@@ -310,7 +333,7 @@ export interface TokenUsage {
 }
 
 export interface ModelUsage extends TokenUsage {
-  source: 'Claude Code' | 'Codex' | 'Agentic Island'
+  source: 'Claude Code' | 'Codex' | 'Antigravity' | 'Agentic Island'
   model: string
   requests: number
 }
@@ -453,6 +476,10 @@ export interface IslandApi {
   killSwitch(): Promise<void>
   resume(): Promise<void>
   shutdown(): Promise<void>
+  /** Scan installed apps on the PC for the permissions panel. */
+  scanInstalledApps(): Promise<InstalledApp[]>
+  /** Set screen-reading permission for a specific app. */
+  setAppPermission(process: string, name: string, allowed: boolean): Promise<void>
 }
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? (T[K] extends unknown[] ? T[K] : DeepPartial<T[K]>) : T[K] }

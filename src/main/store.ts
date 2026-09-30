@@ -12,7 +12,7 @@ export const defaultSettings: Settings = {
   google: { clientId: '', clientSecret: '' },
   mediaControls: true,
   dock: { edge: 'top', pos: 0.5, hidden: false },
-  usageLimits: { claudeDaily: 0, claudeWeekly: 0, codexDaily: 0, codexWeekly: 0, weekStartDay: 1, readPlanUsage: true },
+  usageLimits: { claudeDaily: 0, claudeWeekly: 0, codexDaily: 0, codexWeekly: 0, antigravityDaily: 0, antigravityWeekly: 0, weekStartDay: 1, readPlanUsage: true },
   activeProvider: 'claude',
   providers: {
     claude: { enabled: true, command: '', model: 'claude-sonnet-5', mode: 'readonly' },
@@ -36,6 +36,7 @@ export const defaultSettings: Settings = {
   },
   proactive: { enabled: true, llmPredictions: false },
   launchAtLogin: false,
+  appPermissions: [],
   assistant: {
     provider: 'auto',
     autoApproveGeneral: false,
@@ -45,7 +46,8 @@ export const defaultSettings: Settings = {
     aiInsights: true,
     aiChecksPerHour: 10,
     backgroundModel: 'haiku',
-    autoReviewCommits: true
+    autoReviewCommits: true,
+    webApprovalRequired: true
   }
 }
 

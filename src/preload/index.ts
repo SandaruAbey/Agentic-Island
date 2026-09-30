@@ -50,7 +50,9 @@ const api: IslandApi = {
   getAudit: () => invoke('audit'),
   killSwitch: () => invoke('security:kill'),
   resume: () => invoke('security:resume'),
-  shutdown: () => invoke('security:shutdown')
+  shutdown: () => invoke('security:shutdown'),
+  scanInstalledApps: () => invoke('apps:scan'),
+  setAppPermission: (process: string, name: string, allowed: boolean) => invoke('apps:set-permission', process, name, allowed)
 }
 
 contextBridge.exposeInMainWorld('island', api)

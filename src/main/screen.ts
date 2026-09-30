@@ -2,7 +2,7 @@ import { desktopCapturer, screen as eScreen } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ActivityContext } from '@shared/types'
+import type { ActivityContext, AppPermission } from '@shared/types'
 import { killTree } from './agents'
 
 /**
@@ -83,8 +83,14 @@ export class ScreenReader {
   }
 
   /** Capture the foreground window and return its text, or a skip reason. */
-  async read(activity: ActivityContext): Promise<{ text: string; skipped: string | null }> {
+  async read(activity: ActivityContext, permissions?: AppPermission[]): Promise<{ text: string; skipped: string | null }> {
     if (PRIVATE.test(activity.title) || PRIVATE.test(activity.process)) return { text: '', skipped: 'Private window — not read' }
+    // Check per-app permissions: if the user has explicitly blocked this app, skip it.
+    if (permissions) {
+      const proc = activity.process.toLowerCase()
+      const perm = permissions.find(p => p.process === proc)
+      if (perm && !perm.allowed) return { text: '', skipped: `Blocked by your app permissions — ${perm.name || activity.app} is not allowed` }
+    }
     const { width, height } = eScreen.getPrimaryDisplay().size
     const sources = await desktopCapturer.getSources({
       types: ['window'],

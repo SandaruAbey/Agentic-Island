@@ -481,6 +481,8 @@ export class AgentManager {
           a.push('--disallowedTools', ['Bash', 'PowerShell', ...deny.filter(t => !t.startsWith('Bash('))].join(','))
         }
         a.push('--permission-mode', mode === 'edit' ? 'acceptEdits' : 'default')
+        // When web approval is required, web tools are still listed (allowed) but the run
+        // will always go through the approval card (handled in request/queueRun).
         return a
       }
       case 'codex': {

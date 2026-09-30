@@ -138,7 +138,7 @@ export class InsightEngine {
     if (!s.screenWatch || !activity || this.busy || this.d.isLocked()) return
     this.busy = true
     try {
-      const { text, skipped } = await this.d.reader.read(activity)
+      const { text, skipped } = await this.d.reader.read(activity, this.d.getSettings().appPermissions)
       this.status = { app: activity.app, capturedAt: Date.now(), chars: text.length, skipped }
       if (skipped) {
         this.screenText = ''
@@ -251,7 +251,18 @@ export class InsightEngine {
         createdAt: now
       })
     }
-    return out.slice(0, 3)
+    // Always offer help when a browser is in focus — proactive web assistance.
+    if (a.kind === 'browser' && !a.signIn && text.length > 200 && text.length <= 2500) {
+      out.push({
+        id: `browser-help:${short(a.title)}`,
+        title: 'Need help with this page?',
+        detail: `Isla can read and assist with what\'s on ${a.app}`,
+        icon: 'eye',
+        action: { type: 'do', title: `Help with: ${a.title.slice(0, 50)}`, prompt: 'Look at what is on my screen in the browser. Tell me what this page is about in one sentence, then ask what I would like help with. If you notice anything useful (forms, errors, instructions), mention it.' },
+        createdAt: now
+      })
+    }
+    return out.slice(0, 4)
   }
 
   private async aiCheck(hash: string, activity: ActivityContext): Promise<void> {

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import type { IslandSnapshot, ProviderId, ProviderStatus, Settings } from '@shared/types'
+import type { AppPermission, InstalledApp, IslandSnapshot, ProviderId, ProviderStatus, Settings } from '@shared/types'
 import { Icon, Section, Segmented, Toggle, cleanErr } from '../components/ui'
 
-type Tab = 'agents' | 'workspaces' | 'inbox' | 'general'
+type Tab = 'agents' | 'workspaces' | 'inbox' | 'general' | 'permissions'
 
 export function SettingsPanel({ snap, onTyping }: { snap: IslandSnapshot; onTyping: (v: boolean) => void }) {
   const [tab, setTab] = useState<Tab>('agents')
@@ -16,13 +16,15 @@ export function SettingsPanel({ snap, onTyping }: { snap: IslandSnapshot; onTypi
           { value: 'agents', label: 'Agents & models' },
           { value: 'workspaces', label: 'Workspaces' },
           { value: 'inbox', label: 'Inbox' },
-          { value: 'general', label: 'General' }
+          { value: 'general', label: 'General' },
+          { value: 'permissions', label: 'App permissions' }
         ]}
       />
       {tab === 'agents' && <Agents snap={snap} focus={focus} />}
       {tab === 'workspaces' && <Workspaces snap={snap} />}
       {tab === 'inbox' && <Inbox snap={snap} focus={focus} />}
       {tab === 'general' && <General s={snap.settings} snap={snap} />}
+      {tab === 'permissions' && <AppPermissions snap={snap} />}
     </div>
   )
 }
@@ -526,6 +528,24 @@ function General({ s, snap }: { s: Settings; snap: IslandSnapshot }) {
             />
           </label>
         ))}
+        {(
+          [
+            ['antigravityDaily', 'Antigravity · tokens per day'],
+            ['antigravityWeekly', 'Antigravity · tokens per week']
+          ] as const
+        ).map(([key, label]) => (
+          <label key={key}>
+            <span>{label}</span>
+            <input
+              inputMode="numeric"
+              defaultValue={String(s.usageLimits[key])}
+              onBlur={e => {
+                const v = Math.max(0, Math.round(Number(e.target.value.replace(/[^\d.]/g, '')) || 0))
+                if (v !== s.usageLimits[key]) void window.island.updateSettings({ usageLimits: { [key]: v } })
+              }}
+            />
+          </label>
+        ))}
         <label>
           <span>Week starts on</span>
           <select value={s.usageLimits.weekStartDay} onChange={e => void window.island.updateSettings({ usageLimits: { weekStartDay: Number(e.target.value) } })}>
@@ -571,6 +591,15 @@ function General({ s, snap }: { s: Settings; snap: IslandSnapshot }) {
       </div>
       <div className="row-between">
         <div>
+          <strong>Ask permission for web operations</strong>
+          <p className="muted small">
+            When enabled, any task that uses web access (search, fetch) will always show the approval card first, even for General questions. This ensures you approve before any data leaves this PC.
+          </p>
+        </div>
+        <Toggle label="Web approval" checked={s.assistant.webApprovalRequired} onChange={v => setA({ webApprovalRequired: v })} />
+      </div>
+      <div className="row-between">
+        <div>
           <strong>Proactive suggestions</strong>
           <p className="muted small">Watch git state and the inbox and suggest the next step.</p>
         </div>
@@ -590,6 +619,87 @@ function General({ s, snap }: { s: Settings; snap: IslandSnapshot }) {
         <Toggle label="Launch at login" checked={s.launchAtLogin} onChange={v => void window.island.updateSettings({ launchAtLogin: v })} />
       </div>
       <p className="muted small">Shortcuts: Ctrl+Alt+Space shows/hides the island · Ctrl+Alt+Shift+K engages the kill switch.</p>
+    </div>
+  )
+}
+
+function AppPermissions({ snap }: { snap: IslandSnapshot }) {
+  const [apps, setApps] = useState<InstalledApp[]>([])
+  const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState('')
+  const perms = snap.settings.appPermissions
+
+  useEffect(() => {
+    void window.island.scanInstalledApps().then(a => { setApps(a); setLoading(false) })
+  }, [])
+
+  const getPermission = (proc: string): boolean => {
+    const p = perms.find(x => x.process === proc.toLowerCase())
+    return p ? p.allowed : true // Default: allowed
+  }
+
+  const toggle = (app: InstalledApp, allowed: boolean) => {
+    void window.island.setAppPermission(app.process, app.name, allowed)
+  }
+
+  const filtered = filter
+    ? apps.filter(a => a.name.toLowerCase().includes(filter.toLowerCase()) || a.process.toLowerCase().includes(filter.toLowerCase()))
+    : apps
+
+  // Show blocked apps at the top
+  const blocked = perms.filter(p => !p.allowed)
+
+  return (
+    <div className="general">
+      <div>
+        <strong>Screen reading permissions</strong>
+        <p className="muted small">
+          Choose which apps Isla is allowed to read with on-device OCR. Blocked apps will not have their screen content captured.
+          Password managers, banking and private windows are always blocked regardless of these settings.
+        </p>
+      </div>
+      {blocked.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <p className="muted small" style={{ marginBottom: 4 }}>Currently blocked ({blocked.length}):</p>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {blocked.map(p => (
+              <button key={p.process} className="btn ghost sm" style={{ color: '#ff453a', borderColor: '#ff453a33', fontSize: 11 }} onClick={() => void window.island.setAppPermission(p.process, p.name, true)}>
+                ✕ {p.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      <input
+        type="text"
+        placeholder="Search apps…"
+        value={filter}
+        onChange={e => setFilter(e.target.value)}
+        style={{ width: '100%', marginBottom: 8 }}
+      />
+      {loading ? (
+        <div className="empty">Scanning installed apps…</div>
+      ) : filtered.length === 0 ? (
+        <div className="empty">No apps found matching "{filter}".</div>
+      ) : (
+        <ul className="ws-list" style={{ maxHeight: 300, overflowY: 'auto' }}>
+          {filtered.slice(0, 100).map(a => {
+            const allowed = getPermission(a.process)
+            return (
+              <li key={a.process} style={{ opacity: allowed ? 1 : 0.6 }}>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <strong style={{ fontSize: 12 }}>{a.name}</strong>
+                  <span className="muted small" style={{ marginLeft: 6 }}>{a.process}</span>
+                </span>
+                <Toggle label={`Allow ${a.name}`} checked={allowed} onChange={v => toggle(a, v)} />
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      <p className="muted small" style={{ marginTop: 8 }}>
+        {apps.length} apps detected · apps not listed here follow the default (allowed).
+      </p>
     </div>
   )
 }

@@ -25,7 +25,7 @@ const localDate = (ts: number | string) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-function walk(dir: string, depth: number, since: number, out: string[]): void {
+function walk(dir: string, depth: number, since: number, out: string[], exts: string[] = ['.jsonl']): void {
   if (!existsSync(dir) || depth < 0) return
   let entries: import('node:fs').Dirent[]
   try {
@@ -35,8 +35,8 @@ function walk(dir: string, depth: number, since: number, out: string[]): void {
   }
   for (const e of entries) {
     const p = join(dir, e.name)
-    if (e.isDirectory()) walk(p, depth - 1, since, out)
-    else if (e.name.endsWith('.jsonl')) {
+    if (e.isDirectory()) walk(p, depth - 1, since, out, exts)
+    else if (exts.some(ext => e.name.endsWith(ext))) {
       try {
         if (statSync(p).mtimeMs >= since) out.push(p)
       } catch {
@@ -137,12 +137,36 @@ export async function scanUsage(islandCostUsd: number, islandRows: ModelUsage[])
   walk(codexRoot, 4, since, codexFiles)
   if (!claudeFiles.length) notes.push('No Claude Code sessions found in the last 7 days (~/.claude/projects).')
   if (!codexFiles.length) notes.push('No Codex sessions found in the last 7 days (~/.codex/sessions).')
-  notes.push('Gemini CLI and Antigravity keep no local token logs; only their running processes are shown.')
 
   const rows: Row[] = []
   const seen = new Set<string>()
   for (const f of claudeFiles) rows.push(...(await parseFile(f, 'claude', seen).catch(() => [])))
   for (const f of codexFiles) rows.push(...(await parseFile(f, 'codex', new Set()).catch(() => [])))
+
+  // ---- Antigravity: try to find real token logs ----
+  const antigravityRoots = [
+    join(homedir(), '.gemini', 'logs'),
+    join(homedir(), '.gemini', 'usage'),
+    join(homedir(), '.gemini', 'sessions'),
+    join(process.env.APPDATA ?? '', 'Antigravity', 'logs'),
+    join(process.env.APPDATA ?? '', 'Antigravity', 'usage'),
+    join(process.env.APPDATA ?? '', 'Antigravity IDE', 'logs'),
+    join(process.env.LOCALAPPDATA ?? '', 'antigravity', 'logs'),
+    join(process.env.LOCALAPPDATA ?? '', 'antigravity', 'usage')
+  ].filter(Boolean)
+  const antigravityFiles: string[] = []
+  for (const r of new Set(antigravityRoots)) walk(r, 3, since, antigravityFiles, ['.jsonl', '.json', '.log'])
+  let antigravityFound = false
+  for (const f of antigravityFiles) {
+    const aRows = await parseAntigravityFile(f, since).catch(() => [])
+    if (aRows.length) {
+      antigravityFound = true
+      rows.push(...aRows)
+    }
+  }
+  if (!antigravityFound) {
+    notes.push('No Antigravity usage logs found — Antigravity shows its own quota in its settings.')
+  }
 
   const today = localDate(Date.now())
   const agg = (filter: (r: Row) => boolean): ModelUsage[] => {
@@ -323,6 +347,38 @@ export async function computeLimits(cfg: UsageLimitConfig): Promise<AiLimit[]> {
     }
     out.push({ id: d.id, label: d.label, color: d.color, inner, outer, reported: !!reported })
   }
+  // ---- Antigravity: only show ring if real logs were found ----
+  const antigravityLogs = await scanAntigravityRows(28)
+  if (antigravityLogs.length > 0) {
+    const d = { id: 'antigravity' as const, source: 'Antigravity' as Source, label: 'Antigravity', color: '#bf5af2', daily: cfg.antigravityDaily, weekly: cfg.antigravityWeekly }
+    const perDay = new Map<string, number>()
+    for (const r of antigravityLogs) perDay.set(r.date, (perDay.get(r.date) ?? 0) + r.input + r.output + r.cacheWrite)
+    if (perDay.size > 0) {
+      const usedToday = perDay.get(today) ?? 0
+      let usedWeek = 0
+      for (const [date, n] of perDay) if (date >= weekStartDate) usedWeek += n
+      let busiestDay = 0
+      for (const [date, n] of perDay) if (date !== today) busiestDay = Math.max(busiestDay, n)
+      let busiestWeek = 0
+      for (let i = 1; i < 22; i++) {
+        let sum = 0
+        for (let k = 0; k < 7; k++) sum += perDay.get(localDate(Date.now() - (i + k) * 86_400_000)) ?? 0
+        busiestWeek = Math.max(busiestWeek, sum)
+      }
+      const dailyLimit = d.daily > 0 ? d.daily : Math.max(200_000, Math.round(busiestDay * 1.25))
+      const weeklyLimit = d.weekly > 0 ? d.weekly : Math.max(1_000_000, Math.round(busiestWeek * 1.25), Math.round(dailyLimit * 3))
+      const pct = (u: number, l: number) => Math.min(100, Math.round((u / l) * 100))
+      out.push({
+        id: 'antigravity',
+        label: 'Antigravity',
+        color: d.color,
+        inner: { label: 'Today', pct: pct(usedToday, dailyLimit), used: usedToday, limit: dailyLimit, resetsAt: tomorrow },
+        outer: { label: 'Week', pct: pct(usedWeek, weeklyLimit), used: usedWeek, limit: weeklyLimit, resetsAt: nextWeek },
+        reported: false
+      })
+    }
+  }
+
   return out
 }
 
@@ -404,4 +460,78 @@ export function listAiProcesses(): Promise<AiProcess[]> {
       }
     )
   })
+}
+
+// ---- Antigravity log parsing ----
+
+/**
+ * Try to parse Antigravity/Gemini token usage from log files.
+ * Antigravity may store usage data in various formats — we try several known patterns.
+ * If no parseable logs are found, returns an empty array (no ring will be shown).
+ */
+async function parseAntigravityFile(path: string, since: number): Promise<Row[]> {
+  const map = new Map<string, Row>()
+  const rl = createInterface({ input: createReadStream(path, { encoding: 'utf8' }), crlfDelay: Infinity })
+  for await (const line of rl) {
+    if (!line || line.length > 2_000_000) continue
+    // Skip lines that clearly don't contain usage data
+    if (!line.includes('token') && !line.includes('usage') && !line.includes('model')) continue
+    let j: any
+    try {
+      j = JSON.parse(line)
+    } catch {
+      continue
+    }
+    // Try multiple possible log formats
+    const ts = j.timestamp || j.ts || j.created_at || j.time
+    if (!ts) continue
+    const tsMs = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Date.parse(String(ts))
+    if (isNaN(tsMs) || tsMs < since) continue
+    // Format 1: { usage: { input_tokens, output_tokens } }
+    const u = j.usage || j.token_usage || j.tokens
+    if (u && (u.input_tokens !== undefined || u.output_tokens !== undefined || u.total_tokens !== undefined)) {
+      addRow(map, {
+        date: localDate(tsMs),
+        source: 'Antigravity',
+        model: j.model || j.message?.model || 'unknown',
+        input: u.input_tokens ?? u.prompt_tokens ?? 0,
+        output: u.output_tokens ?? u.completion_tokens ?? 0,
+        cacheRead: u.cache_read_input_tokens ?? u.cached_tokens ?? 0,
+        cacheWrite: u.cache_creation_input_tokens ?? 0
+      })
+      continue
+    }
+    // Format 2: flat { input_tokens, output_tokens } at top level
+    if (j.input_tokens !== undefined || j.output_tokens !== undefined) {
+      addRow(map, {
+        date: localDate(tsMs),
+        source: 'Antigravity',
+        model: j.model || 'unknown',
+        input: j.input_tokens ?? 0,
+        output: j.output_tokens ?? 0,
+        cacheRead: j.cache_read_input_tokens ?? 0,
+        cacheWrite: j.cache_creation_input_tokens ?? 0
+      })
+    }
+  }
+  return [...map.values()]
+}
+
+async function scanAntigravityRows(days: number): Promise<Row[]> {
+  const since = Date.now() - days * 86_400_000
+  const roots = [
+    join(homedir(), '.gemini', 'logs'),
+    join(homedir(), '.gemini', 'usage'),
+    join(homedir(), '.gemini', 'sessions'),
+    join(process.env.APPDATA ?? '', 'Antigravity', 'logs'),
+    join(process.env.APPDATA ?? '', 'Antigravity', 'usage'),
+    join(process.env.APPDATA ?? '', 'Antigravity IDE', 'logs'),
+    join(process.env.LOCALAPPDATA ?? '', 'antigravity', 'logs'),
+    join(process.env.LOCALAPPDATA ?? '', 'antigravity', 'usage')
+  ].filter(Boolean)
+  const files: string[] = []
+  for (const r of new Set(roots)) walk(r, 3, since, files, ['.jsonl', '.json', '.log'])
+  const rows: Row[] = []
+  for (const f of files) rows.push(...(await parseAntigravityFile(f, since).catch(() => [])))
+  return rows
 }

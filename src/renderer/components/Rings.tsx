@@ -88,7 +88,7 @@ export function LimitCards({ limits }: { limits: AiLimit[] }) {
             <strong style={{ color: l.color }}>{l.label}</strong>
             <span>{describe(l.outer)}</span>
             <span>{describe(l.inner)}</span>
-            <em>{l.reported ? (l.id === 'claude' ? 'Real plan usage from your Claude account' : 'Limits reported by Codex') : 'Estimate from local logs · set limits in Settings → General (0 = your busiest day/week)'}</em>
+            <em>{l.reported ? (l.id === 'claude' ? 'Real plan usage from your Claude account' : l.id === 'codex' ? 'Limits reported by Codex' : 'Real usage from Antigravity logs') : l.id === 'antigravity' ? 'From Antigravity local logs · set limits in Settings → General (0 = your busiest day/week)' : 'Estimate from local logs · set limits in Settings → General (0 = your busiest day/week)'}</em>
           </div>
         </div>
       ))}

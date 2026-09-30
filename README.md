@@ -95,7 +95,7 @@ Anything in the Windows media flyout works: **YouTube in Chrome/Edge/Firefox, Sp
 - **Claude:** your **real plan usage**, the same numbers as Claude's `/usage` screen (session and weekly), read with Claude Code's existing sign-in.
 - **Codex:** its real rate limits, from its local logs.
 - **Usage tab:**
-  - tokens per model for today and the last 7 days, from local Claude Code / Codex logs
+  - tokens per model for today and the last 7 days, from local Claude Code / Codex / Antigravity logs
   - Isla's own background-check cost
   - **every AI app running on the PC** (Claude, Codex, Gemini, Antigravity, Cursor, Windsurf, Ollama, LM Studio, ChatGPT…) with live CPU and RAM
 
@@ -152,6 +152,8 @@ Google requires every app that reads Gmail to be registered once. Users never se
 | Notice what I'm doing | On | Uses window titles (locally) for context |
 | New mail alerts | On | Peek when new mail arrives |
 | Skip approval for simple General questions | Off | Lets suggested read-only questions skip the card |
+| Ask permission for web operations | On | Always shows approval card before web access |
+| App permissions | All allowed | Control which apps Isla can screen-read |
 | Proactive suggestions / AI predictions | On / Off | Git suggestions / queued "predict next steps" |
 
 ---
@@ -177,8 +179,8 @@ Google requires every app that reads Gmail to be registered once. Users never se
 ---
 
 ## Known limits
-- **Antigravity usage rings** aren't shown. Antigravity keeps its quota inside the running app, and reading it requires taking a private session token from its process, which is blocked by design. Antigravity shows its own quota in its settings.
-- **Gemini CLI and Antigravity** keep no local token logs, so only their running processes appear in the Usage tab.
+- **Antigravity usage rings** are shown only when real token logs are found in `~/.gemini/` or Antigravity's AppData. If no parseable logs exist, no ring is shown (no estimation). Antigravity shows its own quota in its settings.
+- **Gemini CLI** keeps no local token logs, so only its running processes appear in the Usage tab.
 - Estimated rings (Claude with *Real plan usage* off, or Codex without reported limits) compare against your own history or the limits you set, not your actual plan.
 - Not yet tested: multiple monitors, a taskbar placed at the top or side, and pushing to a real remote on first use (Git may show its own sign-in window).
 
