@@ -62,7 +62,19 @@ function ProviderCard({ p, s, active, focus }: { p: ProviderStatus; s: Settings;
   const [model, setModel] = useState(cfg.model)
   const [command, setCommand] = useState(cfg.command)
   const [args, setArgs] = useState(p.id === 'custom' ? s.providers.custom.args.join(' ') : '')
-  useEffect(() => setModel(cfg.model), [cfg.model])
+  const [isCustomModel, setIsCustomModel] = useState(() => !!cfg.model && !p.modelSuggestions.includes(cfg.model))
+  const [customModelText, setCustomModelText] = useState(cfg.model)
+
+  useEffect(() => {
+    setModel(cfg.model)
+    if (cfg.model && !p.modelSuggestions.includes(cfg.model)) {
+      setIsCustomModel(true)
+      setCustomModelText(cfg.model)
+    } else {
+      setIsCustomModel(false)
+      setCustomModelText('')
+    }
+  }, [cfg.model, p.modelSuggestions])
 
   const patch = (v: Partial<Settings['providers'][ProviderId]> & { args?: string[]; label?: string }) =>
     void window.island.updateSettings({ providers: { [p.id]: v } } as Partial<Settings>)
@@ -82,24 +94,51 @@ function ProviderCard({ p, s, active, focus }: { p: ProviderStatus; s: Settings;
         <div className="provider-grid">
           <label>
             <span>Model</span>
-            <input
-              list={`models-${p.id}`}
-              value={model}
-              placeholder="CLI default"
-              spellCheck={false}
-              {...focus}
-              onChange={e => setModel(e.target.value)}
-              onBlur={() => {
-                focus.onBlur()
-                if (model !== cfg.model) patch({ model: model.trim() })
+            <select
+              value={isCustomModel ? '__custom__' : (model || '')}
+              aria-label={`Model for ${p.label}`}
+              onChange={e => {
+                const val = e.target.value
+                if (val === '__custom__') {
+                  setIsCustomModel(true)
+                } else {
+                  setIsCustomModel(false)
+                  setModel(val)
+                  patch({ model: val })
+                }
               }}
-              onKeyDown={e => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-            />
-            <datalist id={`models-${p.id}`}>
+            >
+              <option value="">CLI default</option>
               {p.modelSuggestions.map(m => (
-                <option key={m} value={m} />
+                <option key={m} value={m}>
+                  {m}
+                </option>
               ))}
-            </datalist>
+              {model && !p.modelSuggestions.includes(model) && (
+                <option value={model}>{model}</option>
+              )}
+              <option value="__custom__">Custom model…</option>
+            </select>
+            {isCustomModel && (
+              <input
+                style={{ marginTop: 6 }}
+                value={customModelText}
+                placeholder="Type custom model id"
+                spellCheck={false}
+                autoFocus
+                {...focus}
+                onChange={e => setCustomModelText(e.target.value)}
+                onBlur={() => {
+                  focus.onBlur()
+                  const trimmed = customModelText.trim()
+                  setModel(trimmed)
+                  if (trimmed !== cfg.model) patch({ model: trimmed })
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                }}
+              />
+            )}
           </label>
           <label>
             <span>Permissions</span>
@@ -148,8 +187,9 @@ function ProviderCard({ p, s, active, focus }: { p: ProviderStatus; s: Settings;
         </div>
       ) : (
         <p className="muted small provider-note">
-          Antigravity is an IDE, so Isla opens your workspace in it and puts the prompt on your clipboard. Choose the model inside Antigravity's
-          agent panel (Gemini, Claude or GPT models).
+          {p.id === 'antigravity'
+            ? 'Install Antigravity CLI (agy) to run headlessly and select models directly, or Isla opens your workspace in Antigravity IDE.'
+            : `${p.label} cannot run headless.`}
         </p>
       )}
     </div>
@@ -419,8 +459,8 @@ function General({ s, snap }: { s: Settings; snap: IslandSnapshot }) {
         <div>
           <strong>Assistant for everyday questions</strong>
           <p className="muted small">
-            Answers General questions (mail, writing, explaining). Antigravity only works inside its IDE, so a background agent is used here.
-            {snap.assistantProvider ? '' : ' No background agent found — install Claude Code, Codex CLI or Gemini CLI.'}
+            Answers General questions (mail, writing, explaining).
+            {snap.assistantProvider ? '' : ' No background agent found — install Claude Code, Codex CLI, Gemini CLI, or Antigravity CLI (agy).'}
           </p>
         </div>
         <select

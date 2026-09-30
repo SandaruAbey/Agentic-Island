@@ -14,7 +14,12 @@ const PROVIDERS: Record<ProviderId, { label: string; bin: string[]; headless: bo
   },
   codex: { label: 'Codex CLI', bin: ['codex'], headless: true, models: ['gpt-5-codex', 'gpt-5', 'gpt-5-mini'] },
   gemini: { label: 'Gemini CLI', bin: ['gemini'], headless: true, models: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
-  antigravity: { label: 'Antigravity', bin: ['antigravity', 'antigravity-ide'], headless: false, models: [] },
+  antigravity: {
+    label: 'Antigravity CLI',
+    bin: ['agy', 'antigravity', 'antigravity-cli'],
+    headless: true,
+    models: ['gemini-3.8-flash', 'gemini-3.8-pro', 'claude-opus-4-6', 'claude-sonnet-4-6', 'gemini-2.5-pro', 'gemini-2.5-flash']
+  },
   custom: { label: 'Custom CLI', bin: [], headless: true, models: [] }
 }
 
@@ -56,6 +61,8 @@ function searchPath(): string {
     join(process.env.APPDATA ?? '', 'npm'),
     join(h, '.local', 'bin'),
     join(h, '.bun', 'bin'),
+    join(process.env.LOCALAPPDATA ?? '', 'agy', 'bin'),
+    join(h, '.gemini', 'antigravity-cli', 'bin'),
     join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Antigravity', 'bin'),
     join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Antigravity'),
     join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Antigravity IDE', 'bin'),
@@ -152,8 +159,17 @@ export class AgentManager {
       if (override) path = existsSync(override) ? override : await where(override)
       else for (const b of def.bin) if (!path) path = await where(b)
       if (!path && id === 'antigravity') {
-        const programs = join(process.env.LOCALAPPDATA ?? '', 'Programs')
-        path = [join(programs, 'Antigravity', 'Antigravity.exe'), join(programs, 'Antigravity IDE', 'Antigravity IDE.exe')].find(existsSync) ?? null
+        const agyBin = join(process.env.LOCALAPPDATA ?? '', 'agy', 'bin', 'agy.exe')
+        if (existsSync(agyBin)) {
+          path = agyBin
+        } else {
+          const programs = join(process.env.LOCALAPPDATA ?? '', 'Programs')
+          path = [
+            join(programs, 'Antigravity', 'bin', 'agy.exe'),
+            join(programs, 'Antigravity', 'Antigravity.exe'),
+            join(programs, 'Antigravity IDE', 'Antigravity IDE.exe')
+          ].find(existsSync) ?? null
+        }
       }
       // Agents bundled inside IDE extensions (VS Code, Antigravity, Cursor, Windsurf).
       if (!path && id === 'claude') path = findInExtensions('anthropic.claude-code-', ['resources', 'native-binary', 'claude.exe'])
@@ -211,7 +227,7 @@ export class AgentManager {
     }
     if (s.assistant.provider !== 'auto' && ok(s.assistant.provider)) return s.assistant.provider
     if (ok(s.activeProvider)) return s.activeProvider
-    return (['claude', 'codex', 'gemini', 'custom'] as ProviderId[]).find(ok) ?? null
+    return (['claude', 'codex', 'gemini', 'antigravity', 'custom'] as ProviderId[]).find(ok) ?? null
   }
 
   /**
@@ -236,6 +252,9 @@ export class AgentManager {
       input = `${system}\n\n${prompt}`
     } else if (id === 'gemini') {
       args = ['--approval-mode', 'default', ...(model ? ['-m', model] : [])]
+      input = `${system}\n\n${prompt}`
+    } else if (id === 'antigravity') {
+      args = ['--print', '--dangerously-skip-permissions']
       input = `${system}\n\n${prompt}`
     } else {
       args = this.getSettings().providers.custom.args.map(x => x.replaceAll('{model}', model))
@@ -494,6 +513,11 @@ export class AgentManager {
       case 'gemini': {
         const a = ['--approval-mode', mode === 'edit' ? 'auto_edit' : 'default']
         if (model) a.push('-m', model)
+        return a
+      }
+      case 'antigravity': {
+        const a = ['--print']
+        if (mode === 'edit') a.push('--dangerously-skip-permissions')
         return a
       }
       case 'custom':
