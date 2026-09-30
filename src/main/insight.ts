@@ -212,6 +212,35 @@ export class InsightEngine {
         createdAt: now
       })
     }
+    // Teams / WhatsApp / Slack… (app or browser): suggest a reply to the latest message.
+    if (a.kind === 'chat' && text.length > 120) {
+      out.push({
+        id: `chat-reply:${short(text.slice(-600))}`,
+        title: `Suggest a reply in ${a.app}`,
+        detail: 'A short, natural reply to the latest message — paste it with one click.',
+        icon: 'chat',
+        action: {
+          type: 'do',
+          title: `Reply in ${a.app}`,
+          prompt:
+            'This is a chat conversation on my screen. Write ONE short, natural reply I could send to the latest message, in the same language and tone as the conversation. Output only the reply text.'
+        },
+        createdAt: now
+      })
+    }
+    // Lots of non-English text (Sinhala, Tamil, Hindi, Arabic, CJK, Cyrillic…) → offer a translation.
+    const foreign = (text.match(/[\u0D80-\u0DFF\u0B80-\u0BFF\u0900-\u097F\u0600-\u06FF\u0400-\u04FF\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF\u0E00-\u0E7F]/g) ?? []).length
+    const letters = (text.match(/\p{L}/gu) ?? []).length
+    if (letters > 40 && foreign / letters > 0.25) {
+      out.push({
+        id: `translate:${short(text.slice(0, 600))}`,
+        title: 'Translate this to English',
+        detail: `Non-English text in ${a.app}`,
+        icon: 'translate',
+        action: { type: 'do', title: `Translate (${a.app})`, prompt: 'Translate the main non-English text on my screen into natural English. Keep names as they are. Output only the translation.' },
+        createdAt: now
+      })
+    }
     if (a.kind === 'office' && text.length > 500) {
       out.push({
         id: `doc:${short(a.title)}`,
@@ -247,10 +276,6 @@ export class InsightEngine {
       }
       this.suggestions = [sug, ...this.suggestions.filter(x => !x.id.startsWith('ai:'))].slice(0, 4)
       this.d.log('insight.suggested', `${activity.app}: ${sug.title}`)
-      if (Date.now() - this.lastPeek > PEEK_COOLDOWN_MS) {
-        this.lastPeek = Date.now()
-        this.d.notify({ type: 'notify', kind: 'suggest', title: 'Isla suggests', body: sug.title, suggestionId: sug.id })
-      }
       this.d.onChange()
     } catch (e) {
       this.d.log('insight.error', (e as Error).message)

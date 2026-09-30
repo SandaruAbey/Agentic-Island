@@ -26,7 +26,7 @@ while ($true) {
   [void][IslandFG]::GetWindowThreadProcessId($h, [ref]$procId)
   $name = ''
   try { $name = (Get-Process -Id $procId -ErrorAction Stop).ProcessName } catch {}
-  $line = $name + [char]31 + $sb.ToString()
+  $line = $name + [char]31 + $sb.ToString() + [char]31 + $procId
   if ($line -ne $last) { $last = $line; [Console]::Out.WriteLine($line); [Console]::Out.Flush() }
   Start-Sleep -Milliseconds 1500
 }
@@ -36,14 +36,14 @@ const BROWSERS = /^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen)$/i
 const MAIL_APPS = /^(outlook|olk|hxoutlook|thunderbird|mailbird|em ?client)$/i
 const IDES = /^(code|code - insiders|cursor|windsurf|antigravity|antigravity ide|kiro|idea64|pycharm64|webstorm64|rider64|devenv|sublime_text|zed)$/i
 const OFFICE = /^(winword|excel|powerpnt|onenote|acrord32|acrobat)$/i
-const CHAT = /^(teams|ms-teams|slack|discord|whatsapp|telegram|signal|zoom)$/i
+const CHAT = /^(teams|ms-teams|slack|discord|whatsapp|whatsapp\.root|telegram|signal|zoom|messenger|viber)$/i
 const TERMINALS = /^(windowsterminal|powershell|pwsh|cmd|wt|alacritty|wezterm-gui)$/i
 const IDE_NAMES = /^(visual studio code( - insiders)?|visual studio|cursor|antigravity( ide)?|windsurf|kiro|zed|intellij idea|pycharm|webstorm|rider|sublime text)$/i
 const SIGN_IN = /(sign[ -]?in|log[ -]?in|verify|verification|2-step|two[- ]factor|authenticat|one[- ]time|\botp\b|security code|confirm your)/i
 const MAIL_TITLE = /(gmail|outlook|inbox|yahoo mail|proton mail|mail -)/i
 const CHAT_TITLE = /(microsoft teams|slack|discord|whatsapp|messenger|telegram)/i
 
-export function classify(process: string, title: string): ActivityContext | null {
+export function classify(process: string, title: string, pid = 0): ActivityContext | null {
   if (!process || /^(agentic island|electron|explorer|searchhost|shellexperiencehost|lockapp)$/i.test(process)) return null
   let kind: ActivityContext['kind'] = 'other'
   if (MAIL_APPS.test(process)) kind = 'mail'
@@ -73,7 +73,8 @@ export function classify(process: string, title: string): ActivityContext | null
     title: title.slice(0, 200),
     kind,
     signIn: (kind === 'browser' || kind === 'mail') && SIGN_IN.test(title),
-    project
+    project,
+    pid
   }
 }
 
@@ -98,8 +99,8 @@ export class ContextWatcher {
       const lines = buf.split(/\r?\n/)
       buf = lines.pop() ?? ''
       for (const line of lines) {
-        const [proc, title = ''] = line.split('\x1f')
-        const next = classify(proc?.trim() ?? '', title.trim())
+        const [proc, title = '', pid = '0'] = line.split('\x1f')
+        const next = classify(proc?.trim() ?? '', title.trim(), Number(pid) || 0)
         // Ignore our own window so the context stays on the app the user was really using.
         if (!next) continue
         this.current = next

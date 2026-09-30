@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AskResult, IslandSnapshot, MediaState, PanelId, RunContext, Suggestion } from '@shared/types'
 import { NowPlaying } from '../components/Media'
+import { actOn, actionLabel } from '../suggest'
 import { Icon, Segmented, cleanErr, shortPath } from '../components/ui'
 import { RunCard } from './Agent'
 import { MailList, MailReader } from './Mail'
@@ -63,37 +64,12 @@ export function HomePanel({
 
   const act = async (sug: Suggestion) => {
     setInfo(null)
-    try {
-      const a = sug.action
-      if (a.type === 'run') {
-        const run = await window.island.requestRun(a.request)
-        setResult({ type: 'run', run })
-      } else if (a.type === 'do') {
-        const run = await window.island.doSuggestion(sug.id)
-        setResult({ type: 'run', run })
-      } else if (a.type === 'commit') {
-        const p = snap.proposal
-        if (!p) return
-        setInfo('Committing…')
-        const r = await window.island.commit(p.message, a.push, p.diffHash)
-        r.ok ? setInfo(r.message) : setResult({ type: 'error', message: r.message })
-      } else if (a.type === 'ask') {
-        setCtx(a.context)
-        const r = await window.island.ask(a.text, a.context)
-        setResult(r)
-      } else if (a.type === 'copy-otp') {
-        await window.island.copyOtp(a.id)
-        setInfo('Code copied — the clipboard clears automatically.')
-      } else if (a.type === 'open-panel') open(a.panel)
-      else if (a.type === 'add-workspace') await window.island.addWorkspace()
-      else if (a.type === 'git') {
-        if (a.op === 'push' && !confirm(`Run "git push" in ${s.activeWorkspace}?`)) return
-        const r = await window.island.gitAction(a.op)
-        setInfo(r.message)
-      }
-    } catch (e) {
-      setResult({ type: 'error', message: cleanErr(e) })
-    }
+    const out = await actOn(sug, snap)
+    if (out.kind === 'run') setResult({ type: 'run', run: out.run })
+    else if (out.kind === 'ask') setResult(out.result)
+    else if (out.kind === 'panel') open(out.panel)
+    else if (out.kind === 'info') setInfo(out.text)
+    else if (out.kind === 'error') setResult({ type: 'error', message: out.text })
   }
 
   // Keep the inline run card live from the snapshot.
@@ -235,6 +211,9 @@ export function HomePanel({
               <button className="sug-main" onClick={() => void act(sug)}>
                 <strong>{sug.title}</strong>
                 <span>{sug.detail}</span>
+              </button>
+              <button className="btn ghost sm sug-act" onClick={() => void act(sug)}>
+                {actionLabel(sug)}
               </button>
               <button className="icon-btn subtle" title="Dismiss" onClick={() => void window.island.dismissSuggestion(sug.id)}>
                 <Icon name="close" size={13} />

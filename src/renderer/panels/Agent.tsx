@@ -42,6 +42,7 @@ export function AgentPanel({ snap }: { snap: IslandSnapshot }) {
 export function RunCard({ run, snap, open, onToggle }: { run: AgentRun; snap: IslandSnapshot; open: boolean; onToggle?: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [showPrompt, setShowPrompt] = useState(false)
+  const [pasted, setPasted] = useState<string | null>(null)
   const label = snap.providers.find(p => p.id === run.provider)?.label ?? run.provider
   const isOpen = open || run.status === 'pending-approval'
   const where = run.context === 'general' ? 'a private scratch folder' : run.workspace
@@ -97,6 +98,7 @@ export function RunCard({ run, snap, open, onToggle }: { run: AgentRun; snap: Is
             <>
               <Output run={run} />
               {showPrompt && <pre className="prompt-preview">{run.prompt}</pre>}
+              {pasted && <div className="alert info">{pasted}</div>}
               <div className="actions">
                 <button className="link" onClick={() => setShowPrompt(v => !v)}>
                   {showPrompt ? 'Hide' : 'Show'} what was sent
@@ -108,9 +110,21 @@ export function RunCard({ run, snap, open, onToggle }: { run: AgentRun; snap: Is
                   </button>
                 ) : (
                   run.output && (
-                    <button className="btn ghost" onClick={() => void window.island.copyText(run.output.replace(/^▸ .*\n/gm, '').trim())}>
-                      <Icon name="copy" size={13} /> Copy answer
-                    </button>
+                    <>
+                      <button className="btn ghost" onClick={() => void window.island.copyText(answerText(run.output))}>
+                        <Icon name="copy" size={13} /> Copy answer
+                      </button>
+                      {/* Paste straight into the app you were using (WhatsApp, Teams, Gmail…). You still press Enter yourself. */}
+                      {run.context === 'general' && run.status === 'done' && snap.activity && snap.activity.kind !== 'ide' && (
+                        <button
+                          className="btn primary"
+                          title={`Switch to ${snap.activity.app} and paste — you press Enter to send`}
+                          onClick={() => void window.island.pasteToApp(answerText(run.output)).then(r => setPasted(r.message))}
+                        >
+                          <Icon name="send" size={13} /> Paste into {snap.activity.app}
+                        </button>
+                      )}
+                    </>
                   )
                 )}
               </div>
@@ -121,6 +135,9 @@ export function RunCard({ run, snap, open, onToggle }: { run: AgentRun; snap: Is
     </article>
   )
 }
+
+/** The answer without tool-call lines (▸ …). */
+const answerText = (out: string) => out.replace(/^▸ .*\n/gm, '').trim()
 
 function Output({ run }: { run: AgentRun }) {
   const ref = useRef<HTMLPreElement>(null)

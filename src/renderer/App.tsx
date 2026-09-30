@@ -4,6 +4,7 @@ import { IslaAvatar, type IslaAnimation } from './avatar'
 import { Icon, cleanErr } from './components/ui'
 import { UsageRings } from './components/Rings'
 import { MediaPill, isPlaying } from './components/Media'
+import { SUGGEST_FACE, actOn, actionLabel } from './suggest'
 import { HomePanel } from './panels/Home'
 import { AgentPanel } from './panels/Agent'
 import { GitPanel } from './panels/Git'
@@ -50,6 +51,7 @@ export function App() {
   const [mailUid, setMailUid] = useState<string | null>(null)
   const [focusRun, setFocusRun] = useState<string | null>(null)
   const [peekMsg, setPeekMsg] = useState<string | null>(null)
+  const sugIdx = useRef(0)
   const [lastActivity, setLastActivity] = useState(Date.now())
   const [now, setNow] = useState(Date.now())
   const collapseTimer = useRef<number>(0)
@@ -102,14 +104,14 @@ export function App() {
         )
       } else if (e.type === 'notify') {
         setNotice(e)
-        react(REACTION[e.kind])
+        react(e.kind === 'suggest' && e.icon ? SUGGEST_FACE[e.icon] : REACTION[e.kind])
         setLastActivity(Date.now())
         setMode(m => (m === 'expanded' ? m : 'peek'))
         window.clearTimeout(noticeTimer.current)
         noticeTimer.current = window.setTimeout(() => {
           setNotice(null)
           setMode(m => (m === 'peek' ? 'compact' : m))
-        }, e.kind === 'otp' ? 20_000 : e.kind === 'mail' || e.kind === 'suggest' || e.kind === 'commit' ? 15_000 : 6000)
+        }, e.kind === 'otp' ? 20_000 : e.kind === 'suggest' || e.kind === 'commit' ? 9000 : e.kind === 'mail' ? 12_000 : 6000)
       }
     })
     const t = window.setInterval(() => setNow(Date.now()), 15_000)
@@ -216,8 +218,9 @@ export function App() {
   mediaModeRef.current = mediaMode
   // Usage rings stay visible next to the music.
   const rings = idle ? snap.limits : []
-  const pillWidth = (mediaMode ? 470 : 250) + rings.length * RING + 26
-  const compactStyle = vertical ? { height: (mediaMode ? 232 : 84) + rings.length * (RING + 4) + 30 } : { width: pillWidth }
+  const sugCount = locked ? 0 : snap.suggestions.length
+  const pillWidth = (mediaMode ? 470 : 250) + rings.length * RING + 26 + (sugCount ? 46 : 0)
+  const compactStyle = vertical ? { height: (mediaMode ? 232 : 84) + rings.length * (RING + 4) + 30 + (sugCount ? 40 : 0) } : { width: pillWidth }
   const showTab = dock.hidden && !dragging && !(mode === 'peek' && notice)
   const hideArrow = { top: 'up', bottom: 'down', left: 'left', right: 'right' }[edge]
   const showArrow = { top: 'down', bottom: 'up', left: 'right', right: 'left' }[edge]
@@ -244,16 +247,48 @@ export function App() {
     setPanel(p)
     setMode('expanded')
   }
-  /** One click on a proactive suggestion runs it (read-only) and shows the answer on Home. */
-  const doIt = async (id: string) => {
-    try {
-      const run = await window.island.doSuggestion(id)
-      setFocusRun(run.id)
+  /** Run any suggestion from the peek: answers open on Home, quick results show right in the peek. */
+  const runSuggestion = async (id: string) => {
+    const sug = snap.suggestions.find(x => x.id === id)
+    if (!sug) {
+      setPeekMsg('That suggestion is no longer available.')
+      return
+    }
+    setPeekMsg('Working on it…')
+    const out = await actOn(sug, snap)
+    setPeekMsg(null)
+    if (out.kind === 'run' || (out.kind === 'ask' && out.result.type === 'run')) {
+      setFocusRun(out.kind === 'run' ? out.run.id : (out.result as { run: { id: string } }).run.id)
       setNotice(null)
       open('home')
-    } catch (e) {
-      setPeekMsg(cleanErr(e))
-    }
+    } else if (out.kind === 'ask' || out.kind === 'panel') {
+      setNotice(null)
+      open(out.kind === 'panel' ? out.panel : 'home')
+    } else if (out.kind === 'info' || out.kind === 'error') {
+      setPeekMsg(out.text)
+      window.setTimeout(() => {
+        setPeekMsg(null)
+        setNotice(null)
+        setMode(m => (m === 'peek' ? 'compact' : m))
+      }, out.kind === 'info' ? 4000 : 8000)
+    } else setNotice(null)
+  }
+
+  /** ✨ on the pill: bring suggestions back one by one. */
+  const reopenSuggestion = () => {
+    const list = snap.suggestions
+    if (!list.length) return
+    const sug = list[sugIdx.current % list.length]
+    sugIdx.current++
+    const isCommit = sug.id.startsWith('commit:') && !!snap.proposal
+    setNotice({ type: 'notify', kind: isCommit ? 'commit' : 'suggest', title: isCommit ? 'Ready to commit' : 'Isla suggests', body: isCommit ? snap.proposal!.message : sug.title, suggestionId: sug.id, icon: sug.icon })
+    react(SUGGEST_FACE[sug.icon])
+    setMode('peek')
+    window.clearTimeout(noticeTimer.current)
+    noticeTimer.current = window.setTimeout(() => {
+      setNotice(null)
+      setMode(m => (m === 'peek' ? 'compact' : m))
+    }, 9000)
   }
   const commitNow = async () => {
     const p = snap?.proposal
@@ -320,6 +355,12 @@ export function App() {
             </>
             )}
             {/* Tuck away straight from the pill — no need to open the island first. */}
+            {sugCount > 0 && (
+              <button className="pill-sugg" title={`${sugCount} suggestion${sugCount > 1 ? 's' : ''} — click to see`} onClick={reopenSuggestion}>
+                <Icon name="spark" size={12} />
+                {sugCount}
+              </button>
+            )}
             <button
               className="pill-hide"
               title="Tuck into the edge"
@@ -343,9 +384,14 @@ export function App() {
             </div>
             {notice.kind === 'suggest' && notice.suggestionId ? (
               <div className="peek-actions">
-                <button className="btn primary round" onClick={() => void doIt(notice.suggestionId!)}>
-                  Do it
-                </button>
+                {(() => {
+                  const sug = snap.suggestions.find(x => x.id === notice.suggestionId)
+                  return sug ? (
+                    <button className="btn primary round" disabled={!!peekMsg} onClick={() => void runSuggestion(sug.id)}>
+                      {actionLabel(sug)}
+                    </button>
+                  ) : null
+                })()}
                 <button className="icon-btn" title="Not now" onClick={() => void window.island.dismissSuggestion(notice.suggestionId!).then(() => setNotice(null))}>
                   <Icon name="close" size={13} />
                 </button>

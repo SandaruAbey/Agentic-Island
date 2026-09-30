@@ -25,6 +25,7 @@ const api: IslandApi = {
   googleSignIn: () => invoke('google:signin'),
   googleSignOut: () => invoke('google:signout'),
   openUrl: url => invoke('open-url', url),
+  pasteToApp: text => invoke('paste-to-app', text),
   addWorkspace: () => invoke('workspace:add'),
   removeWorkspace: p => invoke('workspace:remove', p),
   setActiveWorkspace: p => invoke('workspace:set-active', p),

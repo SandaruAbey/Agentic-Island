@@ -258,6 +258,8 @@ export interface ActivityContext {
   signIn: boolean
   /** Project folder name when an IDE is focused. */
   project: string | null
+  /** Process id of the window, so Isla can paste text back into it. */
+  pid: number
 }
 
 export interface GitFile {
@@ -346,7 +348,7 @@ export interface Suggestion {
   id: string
   title: string
   detail: string
-  icon: 'commit' | 'push' | 'pull' | 'conflict' | 'key' | 'spark' | 'review' | 'warn' | 'mail' | 'folder' | 'eye'
+  icon: 'commit' | 'push' | 'pull' | 'conflict' | 'key' | 'spark' | 'review' | 'warn' | 'mail' | 'folder' | 'eye' | 'chat' | 'translate'
   action: SuggestionAction
   createdAt: number
 }
@@ -401,6 +403,8 @@ export type IslandEvent =
       body: string
       uid?: string
       suggestionId?: string
+      /** For suggestion peeks: which kind, so Isla's face can match it. */
+      icon?: Suggestion['icon']
     }
 
 /** API exposed on window.island by the preload script. */
@@ -422,6 +426,8 @@ export interface IslandApi {
   googleSignIn(): Promise<{ ok: boolean; message: string; needsSetup?: boolean }>
   googleSignOut(): Promise<void>
   openUrl(url: string): Promise<void>
+  /** Copy text, switch back to the app you were using, and paste it (never presses Enter). */
+  pasteToApp(text: string): Promise<{ ok: boolean; message: string }>
   addWorkspace(): Promise<string | null>
   removeWorkspace(path: string): Promise<void>
   setActiveWorkspace(path: string): Promise<void>

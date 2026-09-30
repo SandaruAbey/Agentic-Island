@@ -291,6 +291,54 @@ export class AgentManager {
   }
 
   /**
+   * Everyday text jobs (summarize, reply, translate) — shown as a normal task card, but run through the
+   * lean tool-less call with the cheap background model (~1k tokens instead of a full agent session).
+   * The user clicked for it, so no approval card; it can't read files, run commands or reach the web.
+   */
+  liteRun(title: string, system: string, prompt: string, model: string, locked: boolean): AgentRun {
+    if (locked) throw new Error('Kill switch is engaged. Resume the island first.')
+    const provider = this.assistantProvider()
+    if (!provider) throw new Error('No background-capable agent found. Install or sign in to Claude Code, Codex CLI or Gemini CLI.')
+    const run: AgentRun = {
+      id: randomUUID(),
+      provider,
+      model: model || this.getSettings().providers[provider].model,
+      mode: 'readonly',
+      workspace: this.assistantDir,
+      prompt,
+      title: title.slice(0, 80),
+      status: 'running',
+      output: '',
+      startedAt: Date.now(),
+      context: 'general',
+      allowWeb: false,
+      hasMail: false
+    }
+    this.runs.unshift(run)
+    this.runs = this.runs.slice(0, 30)
+    this.log('run.lite', run.title)
+    this.onChange()
+    this.quickAsk(system, prompt, model)
+      .then(r => {
+        run.output = r.text.trim() || '(no answer)'
+        run.usage = { input: r.tokens, output: 0, cacheRead: 0, cacheWrite: 0 }
+        run.costUsd = r.cost
+        if (run.status === 'running') run.status = 'done'
+      })
+      .catch(e => {
+        run.output = String((e as Error).message)
+        if (run.status === 'running') run.status = 'error'
+      })
+      .finally(() => {
+        run.endedAt = Date.now()
+        this.onOutput(run.id, '')
+        this.onFinish(run)
+        this.onChange()
+      })
+    return run
+  }
+
+  /**
    * Queue a task for approval. `opts` is only ever set by the main process (never from the renderer):
    * the fully composed prompt (e.g. with redacted mail attached) and whether web access is allowed.
    */
