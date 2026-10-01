@@ -136,6 +136,7 @@ export interface Settings {
   /** Allowlisted folders. Agents and git actions only run inside these. */
   workspaces: string[]
   activeWorkspace: string | null
+  scheduledTasks: ScheduledTask[]
   mail: MailConfig
   proactive: {
     enabled: boolean
@@ -146,7 +147,7 @@ export interface Settings {
   /** Per-app screen reading permissions. Apps not listed follow the default (allowed). */
   appPermissions: AppPermission[]
   assistant: {
-    /** Which agent answers General (non-coding) questions. 'auto' = active provider if it can run headless, else the first installed one. */
+    /** @deprecated No longer user-facing — General questions always use activeProvider now. Kept only so old settings.json files still deep-merge cleanly; always normalized back to 'auto' on load. */
     provider: ProviderId | 'auto'
     /** Run read-only General questions without the approval card (never applies when mail content is attached or in edit mode). */
     autoApproveGeneral: boolean
@@ -202,6 +203,8 @@ export interface AgentRun {
   allowWeb: boolean
   /** The prompt includes email content (shown on the approval card). */
   hasMail: boolean
+  /** Set when this run was fired by the TaskScheduler — links back to ScheduledTask.id. */
+  scheduledTaskId?: string
 }
 
 export type RunContext = 'general' | 'project'
@@ -213,8 +216,58 @@ export interface RunRequest {
   provider?: ProviderId
   mode?: AgentMode
   context?: RunContext
+  /** Project-context override: must be allowlisted. Defaults to the globally active workspace when omitted. */
+  workspace?: string
   /** Attach these emails (by uid) as context. Codes inside them are redacted. */
   mailUids?: string[]
+}
+
+export type TaskRecurrence =
+  | { type: 'once'; runAt: number }
+  | { type: 'interval'; everyMs: number }
+  | { type: 'daily'; hour: number; minute: number }
+  /** weekday: 0 = Sunday … 6 = Saturday. */
+  | { type: 'weekly'; weekday: number; hour: number; minute: number }
+
+export interface ScheduledTaskRunSummary {
+  at: number
+  status: RunStatus
+  runId: string
+  /** First ~120 chars of the run's output or error, for a quick glance in the list. */
+  summary: string
+}
+
+export interface ScheduledTask {
+  id: string
+  title: string
+  prompt: string
+  context: RunContext
+  /** Required (and must stay allowlisted) when context === 'project'. */
+  workspace: string | null
+  /** Optional override; null = resolve the default agent the same way any other run does. */
+  provider: ProviderId | null
+  /** edit-mode tasks always land as pending-approval — never fully unattended. */
+  mode: AgentMode
+  recurrence: TaskRecurrence
+  enabled: boolean
+  createdAt: number
+  updatedAt: number
+  nextRunAt: number | null
+  lastRunAt: number | null
+  lastRunStatus: RunStatus | null
+  runCount: number
+  /** Last 10 fires, newest first. Persists across restarts, unlike the in-memory AgentRun ring buffer. */
+  history: ScheduledTaskRunSummary[]
+}
+
+export interface ScheduledTaskInput {
+  title: string
+  prompt: string
+  context: RunContext
+  workspace?: string | null
+  provider?: ProviderId | null
+  mode: AgentMode
+  recurrence: TaskRecurrence
 }
 
 export interface MailSummary {
@@ -376,7 +429,7 @@ export interface Suggestion {
   createdAt: number
 }
 
-export type PanelId = 'home' | 'agent' | 'git' | 'mail' | 'usage' | 'settings' | 'security'
+export type PanelId = 'home' | 'agent' | 'git' | 'mail' | 'usage' | 'scheduler' | 'settings' | 'security'
 
 export interface AuditEntry {
   at: number
@@ -414,6 +467,8 @@ export interface IslandSnapshot {
   /** A Google OAuth client is available (bundled or configured), so "Sign in with Google" works. */
   googleReady: boolean
   version: string
+  scheduledTasks: ScheduledTask[]
+  schedulerStats: { runsLastHour: number; limitPerHour: number }
 }
 
 export type IslandEvent =
@@ -442,7 +497,7 @@ export interface IslandApi {
   dragStart(pillWidth: number, pillHeight: number, offsetX: number, offsetY: number): void
   dragEnd(): void
   setHidden(hidden: boolean): void
-  setPeekActive(active: boolean): void
+  setPeekActive(active: boolean): Promise<boolean>
   mediaControl(cmd: 'toggle' | 'next' | 'prev'): void
   updateSettings(patch: DeepPartial<Settings>): Promise<Settings>
   setMailPassword(password: string): Promise<boolean>
@@ -462,6 +517,11 @@ export interface IslandApi {
   rejectRun(id: string): Promise<void>
   cancelRun(id: string): Promise<void>
   clearRuns(): Promise<void>
+  createTask(input: ScheduledTaskInput): Promise<ScheduledTask>
+  updateTask(id: string, patch: Partial<ScheduledTaskInput> & { enabled?: boolean }): Promise<ScheduledTask>
+  deleteTask(id: string): Promise<void>
+  runTaskNow(id: string): Promise<AgentRun>
+  toggleTask(id: string, enabled: boolean): Promise<void>
   openInAntigravity(prompt: string): Promise<{ ok: boolean; message: string }>
   gitAction(op: 'push' | 'pull' | 'fetch'): Promise<{ ok: boolean; message: string }>
   commit(message: string, push: boolean, diffHash: string, allowSecrets?: boolean): Promise<{ ok: boolean; message: string }>

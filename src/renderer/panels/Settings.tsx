@@ -452,7 +452,6 @@ function GoogleG() {
 }
 
 function General({ s, snap }: { s: Settings; snap: IslandSnapshot }) {
-  const headless = snap.providers.filter(p => p.headless && p.installed)
   const setA = (v: Partial<Settings['assistant']>) => void window.island.updateSettings({ assistant: v })
   return (
     <div className="general">
@@ -460,23 +459,11 @@ function General({ s, snap }: { s: Settings; snap: IslandSnapshot }) {
         <div>
           <strong>Assistant for everyday questions</strong>
           <p className="muted small">
-            Answers General questions (mail, writing, explaining).
-            {snap.assistantProvider ? '' : ' No background agent found — install Claude Code, Codex CLI, Gemini CLI, or Antigravity CLI (agy).'}
+            {snap.assistantProvider
+              ? <>Answers General questions (mail, writing, explaining) using your default agent from Agents & models — currently <b>{snap.providers.find(p => p.id === snap.assistantProvider)?.label}</b>.</>
+              : 'No background agent found — install Claude Code, Codex CLI, Gemini CLI, or Antigravity CLI (agy).'}
           </p>
         </div>
-        <select
-          className="narrow"
-          value={s.assistant.provider}
-          aria-label="Assistant agent"
-          onChange={e => setA({ provider: e.target.value as Settings['assistant']['provider'] })}
-        >
-          <option value="auto">Automatic{snap.assistantProvider ? ` (${snap.providers.find(p => p.id === snap.assistantProvider)?.label})` : ''}</option>
-          {headless.map(p => (
-            <option key={p.id} value={p.id}>
-              {p.label}
-            </option>
-          ))}
-        </select>
       </div>
       <div className="row-between">
         <div>
@@ -518,10 +505,10 @@ function General({ s, snap }: { s: Settings; snap: IslandSnapshot }) {
           </select>
         </label>
         <label>
-          <span>Background model (cheap is best)</span>
+          <span>Background model for quick checks (cheap is best)</span>
           <input
             defaultValue={s.assistant.backgroundModel}
-            placeholder={s.assistant.provider === 'claude' ? 'haiku' : 'gemini-3.8-flash'}
+            placeholder={snap.assistantProvider === 'claude' ? 'haiku' : 'gemini-3.8-flash'}
             spellCheck={false}
             onBlur={e => e.target.value.trim() !== s.assistant.backgroundModel && setA({ backgroundModel: e.target.value.trim() })}
           />

@@ -36,9 +36,11 @@ const PATHS: Record<string, string> = {
   music: 'M12 3v10.6A4 4 0 1 0 14 17V7h4V3z',
   translate: 'M4 5h7V3h2v2h7v2h-2.2c-.6 2.2-1.8 4.3-3.4 6l2.6 2.6-1.4 1.4L13 14.4 9 18.4 7.6 17l4-4c-.9-1-1.7-2.2-2.2-3.5h2.2c.4.8.9 1.6 1.5 2.3 1.2-1.4 2.1-3 2.6-4.8H4zm13 9h2l4 9h-2.2l-.9-2h-3.8l-.9 2H13zm1 2.5L16.8 19h2.4z',
   chat: 'M4 3h16a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2z',
-  eye: 'M12 5c5 0 9 4.5 10 7-1 2.5-5 7-10 7S3 14.5 2 12c1-2.5 5-7 10-7zm0 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm0 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4z'
+  eye: 'M12 5c5 0 9 4.5 10 7-1 2.5-5 7-10 7S3 14.5 2 12c1-2.5 5-7 10-7zm0 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm0 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4z',
+  clock: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16zm-1 2h2v6.4l4.2 2.5-1 1.7L11 13V6z',
+  search: 'M10 3a7 7 0 0 1 5.6 11.2l5.1 5.1-1.4 1.4-5.1-5.1A7 7 0 1 1 10 3zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10z'
 }
-const EVENODD = new Set(['mail', 'eye'])
+const EVENODD = new Set(['mail', 'eye', 'search', 'clock'])
 
 export function Icon({ name, size = 16, className }: { name: string; size?: number; className?: string }) {
   return (
@@ -89,6 +91,15 @@ export function timeAgo(ts: number): string {
   if (s < 3600) return `${Math.round(s / 60)}m ago`
   if (s < 86400) return `${Math.round(s / 3600)}h ago`
   return `${Math.round(s / 86400)}d ago`
+}
+
+export function timeUntil(ts: number): string {
+  const s = Math.round((ts - Date.now()) / 1000)
+  if (s <= 0) return 'now'
+  if (s < 60) return `in ${s}s`
+  if (s < 3600) return `in ${Math.round(s / 60)}m`
+  if (s < 86400) return `in ${Math.round(s / 3600)}h`
+  return `in ${Math.round(s / 86400)}d`
 }
 
 export const shortPath = (p: string) => {

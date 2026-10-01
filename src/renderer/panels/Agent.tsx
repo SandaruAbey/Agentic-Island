@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AgentRun, IslandSnapshot } from '@shared/types'
 import { Icon, fmtTokens, shortPath, timeAgo, cleanErr } from '../components/ui'
+import { Markdown, toPlainText } from '../components/Markdown'
 
 const STATUS_LABEL: Record<AgentRun['status'], string> = {
   'pending-approval': 'Needs approval',
@@ -136,17 +137,23 @@ export function RunCard({ run, snap, open, onToggle }: { run: AgentRun; snap: Is
   )
 }
 
-/** The answer without tool-call lines (▸ …). */
-const answerText = (out: string) => out.replace(/^▸ .*\n/gm, '').trim()
+/** The answer as clean plain text (no tool-call lines or markdown symbols) for copying or pasting into chat apps. */
+const answerText = (out: string) => toPlainText(out)
 
 function Output({ run }: { run: AgentRun }) {
-  const ref = useRef<HTMLPreElement>(null)
+  const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (run.status === 'running' && ref.current) ref.current.scrollTop = ref.current.scrollHeight
   }, [run.output, run.status])
   return (
-    <pre ref={ref} className={`output ${run.context === 'general' ? 'prose' : ''}`}>
-      {run.output || (run.status === 'running' ? 'Thinking…' : '(no output)')}
-    </pre>
+    <div ref={ref} className={`output md ${run.context === 'general' ? 'prose' : ''}`}>
+      {run.output ? (
+        <Markdown text={run.output} />
+      ) : run.status === 'running' ? (
+        <span className="thinking">Thinking</span>
+      ) : (
+        <span className="muted">(no output)</span>
+      )}
+    </div>
   )
 }

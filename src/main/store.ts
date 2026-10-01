@@ -23,6 +23,7 @@ export const defaultSettings: Settings = {
   },
   workspaces: [],
   activeWorkspace: null,
+  scheduledTasks: [],
   mail: {
     enabled: false,
     provider: 'google',
@@ -80,6 +81,8 @@ export function loadSettings(): Settings {
     settings = defaultSettings
   }
   settings.mail.hasPassword = !!readSecret('mailPassword')
+  // assistant.provider is deprecated (General runs now always follow activeProvider) — never let a stale pinned value resurface.
+  settings.assistant.provider = 'auto'
   return settings
 }
 
@@ -97,6 +100,7 @@ export function patchSettings(patch: DeepPartial<Settings>): Settings {
   delete p.workspaces
   delete p.dock
   delete p.activeWorkspace
+  delete p.scheduledTasks
   settings = deepMerge(settings, p)
   saveSettings()
   return settings

@@ -10,6 +10,7 @@ import { AgentPanel } from './panels/Agent'
 import { GitPanel } from './panels/Git'
 import { MailPanel } from './panels/Mail'
 import { UsagePanel } from './panels/Usage'
+import { SchedulerPanel } from './panels/Scheduler'
 import { SettingsPanel } from './panels/Settings'
 import { SecurityPanel } from './panels/Security'
 
@@ -25,6 +26,7 @@ const TABS: { id: PanelId; icon: string; label: string }[] = [
   { id: 'git', icon: 'git', label: 'Git' },
   { id: 'mail', icon: 'mail', label: 'Mail' },
   { id: 'usage', icon: 'usage', label: 'AI usage' },
+  { id: 'scheduler', icon: 'clock', label: 'Scheduler' },
   { id: 'settings', icon: 'settings', label: 'Settings' },
   { id: 'security', icon: 'shield', label: 'Security' }
 ]
@@ -94,6 +96,14 @@ export function App() {
       else if (e.type === 'dock') {
         // Landed on an edge (or hidden/shown): new layout + a little squash-and-stretch.
         setDock(e.dock)
+        if (e.dock.hidden) {
+          setNotice(null)
+          setFromNotice(false)
+          window.clearTimeout(noticeTimer.current)
+          window.clearTimeout(hoverTimer.current)
+          window.clearTimeout(collapseTimer.current)
+          setMode('compact')
+        }
         setFromNotice(false)
         draggingRef.current = false
         setDragging(false)
@@ -151,7 +161,11 @@ export function App() {
     if (draggingRef.current) return
     setInteractive(false)
     if (pinned || typing) return
-    collapseTimer.current = window.setTimeout(() => setMode(notice ? 'peek' : 'compact'), 700)
+    if (dock?.hidden) return
+    collapseTimer.current = window.setTimeout(() => {
+      if (dock?.hidden) return
+      setMode(notice ? 'peek' : 'compact')
+    }, 700)
   }
 
   // ---- drag to any edge
@@ -230,15 +244,61 @@ export function App() {
   }, [baseAnimation, react])
 
   const animation = reaction ?? baseAnimation
-  const atTopForNotice = !!dock && dock.edge !== 'top' && ((mode === 'peek' && !!notice) || (mode === 'expanded' && fromNotice))
+  type EdgePhase = 'docked' | 'retracting-dock' | 'relocating' | 'top' | 'retracting-top'
+  const [edgePhase, setEdgePhase] = useState<EdgePhase>('docked')
+  const transitSeq = useRef(0)
+
+  const atTopForNotice = !!dock && dock.edge !== 'top' && ((mode !== 'expanded' && !!notice) || (mode === 'expanded' && fromNotice))
 
   useEffect(() => {
-    window.island.setPeekActive(atTopForNotice)
-  }, [atTopForNotice])
+    if (!dock || dock.edge === 'top') {
+      if (edgePhase !== 'docked') setEdgePhase('docked')
+      return
+    }
+
+    const seq = ++transitSeq.current
+
+    if (atTopForNotice) {
+      if (edgePhase === 'top' || edgePhase === 'retracting-dock' || edgePhase === 'relocating') return
+      setEdgePhase('retracting-dock')
+      const t = window.setTimeout(async () => {
+        if (transitSeq.current !== seq) return
+        setEdgePhase('relocating')
+        await window.island.setPeekActive(true)
+        if (transitSeq.current !== seq) return
+        setLanding(true)
+        setEdgePhase('top')
+        window.setTimeout(() => setLanding(false), 650)
+      }, 220)
+      return () => window.clearTimeout(t)
+    } else {
+      if (edgePhase === 'docked' || edgePhase === 'retracting-top' || edgePhase === 'relocating') return
+      setEdgePhase('retracting-top')
+      const t = window.setTimeout(async () => {
+        if (transitSeq.current !== seq) return
+        setEdgePhase('relocating')
+        await window.island.setPeekActive(false)
+        if (transitSeq.current !== seq) return
+        setLanding(true)
+        setEdgePhase('docked')
+        window.setTimeout(() => setLanding(false), 650)
+      }, 220)
+      return () => window.clearTimeout(t)
+    }
+  }, [atTopForNotice, dock?.edge])
 
   if (!snap || !dock) return null
 
-  const edge = atTopForNotice ? 'top' : dock.edge
+  if (edgePhase === 'relocating') {
+    return <div className="stage" style={{ opacity: 0, pointerEvents: 'none' }} />
+  }
+
+  // At the side dock (left/right/bottom), while not yet at the top, NEVER render as 'peek'.
+  // Keep the compact pill or tab shape so it simply tucks into the edge without flashing the notification banner at the side.
+  // Expanded mode is always allowed so the user can open/interact with Isla at any docked edge.
+  const effectiveMode = (dock.edge !== 'top' && edgePhase !== 'top' && mode === 'peek') ? 'compact' : mode
+  const edge = (edgePhase === 'top' || edgePhase === 'retracting-top') ? 'top' : dock.edge
+  const isRetractingTop = edgePhase === 'retracting-top'
   const vertical = (edge === 'left' || edge === 'right') && !dragging
   // When docked right, flip the avatar so Isla looks toward the screen (left).
   const facingLeft = edge === 'right' && !dragging
@@ -250,7 +310,7 @@ export function App() {
   const sugCount = locked ? 0 : snap.suggestions.length
   const pillWidth = (mediaMode ? 470 : 250) + rings.length * RING + 26 + (sugCount ? 46 : 0)
   const compactStyle = vertical ? { height: (mediaMode ? 232 : 84) + rings.length * (RING + 4) + 30 + (sugCount ? 40 : 0) } : { width: pillWidth }
-  const showTab = dock.hidden && !dragging && !atTopForNotice
+  const showTab = ((dock.hidden && !dragging && edgePhase !== 'top') || edgePhase === 'retracting-dock') && edgePhase !== 'retracting-top'
   const hideArrow = { top: 'up', bottom: 'down', left: 'left', right: 'right' }[edge]
   const showArrow = { top: 'down', bottom: 'up', left: 'right', right: 'left' }[edge]
 
@@ -340,16 +400,17 @@ export function App() {
   }
 
   return (
-    <div className={`stage dock-${edge} ${dragging ? 'dragging' : ''} ${landing ? 'landing' : ''}`}>
+    <div className={`stage dock-${edge} ${dragging ? 'dragging' : ''} ${landing ? 'landing' : ''} ${isRetractingTop ? 'retracting-top' : ''}`}>
       {showTab ? (
         <div
-          className="island tab"
-          role="button"
+          className={`island tab ${edgePhase === 'retracting-dock' ? 'transit' : ''}`}
+          role={dock.hidden && edgePhase !== 'retracting-dock' ? 'button' : undefined}
           aria-label="Show Agentic Island"
-          title="Show Isla"
-          onMouseEnter={() => setInteractive(true)}
-          onMouseLeave={() => setInteractive(false)}
-          onClick={() => window.island.setHidden(false)}
+          title={dock.hidden && edgePhase !== 'retracting-dock' ? 'Show Isla' : undefined}
+          onMouseEnter={() => dock.hidden && edgePhase !== 'retracting-dock' && setInteractive(true)}
+          onMouseMove={() => dock.hidden && edgePhase !== 'retracting-dock' && setInteractive(true)}
+          onMouseLeave={() => dock.hidden && edgePhase !== 'retracting-dock' && setInteractive(false)}
+          onClick={() => dock.hidden && edgePhase !== 'retracting-dock' && window.island.setHidden(false)}
         >
           <Icon name="chevron" size={14} className={`chev-${showArrow}`} />
           {pending.length > 0 && <i className="tab-dot orange" />}
@@ -357,14 +418,14 @@ export function App() {
       ) : (
       <div
         ref={islandRef}
-        className={`island ${mode} ${locked ? 'locked' : ''} ${vertical ? 'vertical' : ''}`}
-        style={mode === 'compact' ? compactStyle : undefined}
+        className={`island ${effectiveMode} ${locked ? 'locked' : ''} ${vertical ? 'vertical' : ''}`}
+        style={effectiveMode === 'compact' ? compactStyle : undefined}
         onMouseEnter={enter}
         onMouseLeave={leave}
         onMouseMove={() => setInteractive(true)}
         onKeyDown={() => setLastActivity(Date.now())}
       >
-        {mode === 'compact' && (
+        {effectiveMode === 'compact' && (
           <div className="compact-row" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
             <IslaAvatar animation={animation} size={30} ariaLabel={`Isla is ${animation}`} className={facingLeft ? 'face-left' : ''} />
             {mediaMode && media ? (
@@ -398,6 +459,11 @@ export function App() {
               aria-label="Tuck into the edge"
               onClick={() => {
                 setInteractive(false)
+                setNotice(null)
+                setFromNotice(false)
+                window.clearTimeout(noticeTimer.current)
+                window.clearTimeout(hoverTimer.current)
+                window.clearTimeout(collapseTimer.current)
                 window.island.setHidden(true)
               }}
             >
@@ -406,7 +472,7 @@ export function App() {
           </div>
         )}
 
-        {mode === 'peek' && notice && (
+        {effectiveMode === 'peek' && notice && (
           <div className="peek-row">
             <IslaAvatar animation={animation} size={52} className={facingLeft ? 'face-left' : ''} />
             <div className="peek-text">
@@ -434,38 +500,71 @@ export function App() {
                     <Icon name="push" size={13} /> Commit & push
                   </button>
                 )}
-                <button className="btn ghost round" onClick={() => { setFromNotice(true); open('git') }}>
+                <button className="btn ghost round" onClick={() => {
+                  window.clearTimeout(noticeTimer.current)
+                  setNotice(null)
+                  setFromNotice(true)
+                  open('git')
+                }}>
                   Details
                 </button>
               </div>
             ) : notice.kind === 'mail' && notice.uid ? (
-              <button className="btn primary round" onClick={() => { setFromNotice(true); openMail(notice.uid!) }}>
+              <button className="btn primary round" onClick={() => {
+                window.clearTimeout(noticeTimer.current)
+                setNotice(null)
+                setFromNotice(true)
+                openMail(notice.uid!)
+              }}>
                 Read
               </button>
             ) : notice.kind === 'otp' && snap.otps[0] ? (
-              <button className="btn primary round" onClick={() => void window.island.copyOtp(snap.otps[0].id).then(() => { setNotice(null); setMode('compact') })}>
+              <button className="btn primary round" onClick={() => {
+                window.clearTimeout(noticeTimer.current)
+                void window.island.copyOtp(snap.otps[0].id).then(() => {
+                  setNotice(null)
+                  setFromNotice(false)
+                  setMode('compact')
+                })
+              }}>
                 <Icon name="copy" /> Copy
               </button>
             ) : notice.kind === 'reminder' || notice.url ? (
               <div className="peek-actions">
                 {notice.url && (
-                  <button className="btn green round" onClick={() => { void window.island.openUrl(notice.url!); setNotice(null); setMode('compact') }}>
+                  <button className="btn green round" onClick={() => {
+                    window.clearTimeout(noticeTimer.current)
+                    void window.island.openUrl(notice.url!)
+                    setNotice(null)
+                    setFromNotice(false)
+                    setMode('compact')
+                  }}>
                     Join / Open
                   </button>
                 )}
-                <button className="icon-btn" title="Dismiss" onClick={() => { setNotice(null); setMode('compact') }}>
+                <button className="icon-btn" title="Dismiss" onClick={() => {
+                  window.clearTimeout(noticeTimer.current)
+                  setNotice(null)
+                  setFromNotice(false)
+                  setMode('compact')
+                }}>
                   <Icon name="close" size={13} />
                 </button>
               </div>
             ) : (
-              <button className="btn ghost round" onClick={() => { setFromNotice(true); open(notice.kind === 'security' ? 'security' : 'agent') }}>
+              <button className="btn ghost round" onClick={() => {
+                window.clearTimeout(noticeTimer.current)
+                setNotice(null)
+                setFromNotice(true)
+                open(notice.kind === 'security' ? 'security' : 'agent')
+              }}>
                 Open
               </button>
             )}
           </div>
         )}
 
-        {mode === 'expanded' && (
+        {effectiveMode === 'expanded' && (
           <div className="expanded">
             <header className="ex-head" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
               <IslaAvatar animation={animation} size={46} className={facingLeft ? 'face-left' : ''} />
@@ -490,6 +589,7 @@ export function App() {
                     {t.id === 'mail' && (snap.otps.length > 0 || snap.inbox.some(m => m.unread)) && (
                       <i className="badge blue">{snap.otps.length || snap.inbox.filter(m => m.unread).length}</i>
                     )}
+                    {t.id === 'scheduler' && snap.scheduledTasks.some(x => x.lastRunStatus === 'error') && <i className="badge">!</i>}
                   </button>
                 ))}
               </nav>
@@ -500,9 +600,13 @@ export function App() {
                 className="icon-btn"
                 title="Tuck into the edge"
                 onClick={() => {
-                  setFromNotice(false)
-                  setMode('compact')
                   setInteractive(false)
+                  setNotice(null)
+                  setFromNotice(false)
+                  window.clearTimeout(noticeTimer.current)
+                  window.clearTimeout(hoverTimer.current)
+                  window.clearTimeout(collapseTimer.current)
+                  setMode('compact')
                   window.island.setHidden(true)
                 }}
               >
@@ -524,6 +628,7 @@ export function App() {
               {panel === 'git' && <GitPanel snap={snap} />}
               {panel === 'mail' && <MailPanel key={mailUid ?? 'inbox'} snap={snap} open={open} initialUid={mailUid} />}
               {panel === 'usage' && <UsagePanel limits={snap.limits} />}
+              {panel === 'scheduler' && <SchedulerPanel snap={snap} onTyping={setTyping} />}
               {panel === 'settings' && <SettingsPanel snap={snap} onTyping={setTyping} />}
               {panel === 'security' && <SecurityPanel snap={snap} />}
             </main>

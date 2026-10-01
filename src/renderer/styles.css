@@ -13,6 +13,11 @@
   --yellow: #ffd60a;
   --purple: #bf5af2;
   --spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
   font-family: 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
   font-size: 13px;
   color: var(--text);
@@ -71,7 +76,7 @@ button:disabled {
 .island {
   background: var(--bg);
   border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  box-shadow: none;
   overflow: hidden;
   transition:
     width 0.5s var(--spring),
@@ -300,11 +305,15 @@ button:disabled {
   background: var(--card-2);
   transition:
     filter 0.15s,
-    background 0.15s;
+    background 0.15s,
+    transform 0.1s;
   white-space: nowrap;
 }
 .btn:hover:not(:disabled) {
   filter: brightness(1.15);
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 .btn.round {
   border-radius: 999px;
@@ -345,11 +354,15 @@ button:disabled {
   display: grid;
   place-items: center;
   color: var(--muted);
+  transition: transform 0.1s, color 0.15s, background 0.15s;
 }
 .icon-btn:hover,
 .icon-btn.active {
   color: var(--text);
   background: rgba(255, 255, 255, 0.08);
+}
+.icon-btn:active {
+  transform: scale(0.93);
 }
 .icon-btn.subtle {
   width: 24px;
@@ -629,6 +642,7 @@ select option {
   border-radius: 14px;
   overflow: hidden;
   border: 1px solid transparent;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 .run.pending-approval {
   border-color: rgba(255, 159, 10, 0.4);
@@ -640,6 +654,7 @@ select option {
   width: 100%;
   padding: 10px 12px;
   text-align: left;
+  cursor: pointer;
 }
 .run-head strong {
   flex: 1;
@@ -697,7 +712,7 @@ select option {
   line-height: 1.5;
   margin: 10px 0 8px;
 }
-pre.output,
+.output,
 pre.prompt-preview {
   margin: 10px 0 0;
   background: #0a0a0b;
@@ -716,6 +731,22 @@ pre.prompt-preview {
 pre.prompt-preview {
   max-height: 160px;
   color: #c7c7cc;
+}
+.output.md {
+  white-space: normal;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  user-select: text;
+}
+/* General answers read like a message, not a terminal: no inner black box. */
+.output.md.prose {
+  background: transparent;
+  border: 0;
+  padding: 2px 4px 0;
+  max-height: 380px;
+  font-size: 13.5px;
+  color: #e8e8ed;
 }
 
 /* ---------------------------------------------------------------- git */
@@ -1062,6 +1093,7 @@ pre.prompt-preview {
   border-radius: 14px;
   padding: 12px 14px;
   border: 1px solid transparent;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 .provider.active {
   border-color: rgba(10, 132, 255, 0.5);
@@ -1415,11 +1447,6 @@ pre.reader-body {
 .answer .run-head {
   padding-right: 34px;
 }
-pre.output.prose {
-  font-family: inherit;
-  font-size: 13.5px;
-  line-height: 1.6;
-}
 .codes > .row-between {
   margin-bottom: 12px;
 }
@@ -1513,7 +1540,7 @@ pre.output.prose {
 .stage.dragging .island {
   border-radius: 22px !important;
   cursor: grabbing;
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+  box-shadow: none;
   transform: scale(1.04);
 }
 
@@ -1553,6 +1580,14 @@ pre.output.prose {
 .stage.dock-left.landing .island,
 .stage.dock-right.landing .island {
   animation-name: land-side;
+}
+
+/* Tucking into top bezel when notice dismisses */
+.stage.retracting-top .island {
+  transform: translateY(-50px) scale(0.9) !important;
+  opacity: 0 !important;
+  transition: transform 0.22s var(--spring), opacity 0.22s ease-out !important;
+  pointer-events: none;
 }
 @keyframes land {
   0% {
@@ -1675,6 +1710,15 @@ pre.output.prose {
 .island.tab:hover {
   color: #fff;
   background: #1c1c1e;
+}
+/* Mid-transit to/from a top notice: same shrink shape as a manual hide, but not clickable/hoverable. */
+.island.tab.transit {
+  cursor: default;
+  pointer-events: none;
+}
+.island.tab.transit:hover {
+  color: #aeaeb2;
+  background: none;
 }
 .tab-dot {
   position: absolute;
@@ -1978,4 +2022,377 @@ pre.output.prose {
 .sug-icon.translate {
   background: rgba(100, 210, 255, 0.14);
   color: #64d2ff;
+}
+
+/* ================================================================ markdown answers */
+
+.md > :first-child {
+  margin-top: 0;
+}
+.md p {
+  margin: 0 0 8px;
+}
+.md > :last-child,
+.md p:last-child {
+  margin-bottom: 0;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-family: 'SF Pro Display', 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+  font-weight: 650;
+  line-height: 1.3;
+  color: #fff;
+  margin: 14px 0 6px;
+}
+.md h1 {
+  font-size: 17px;
+}
+.md h2 {
+  font-size: 15.5px;
+}
+.md h3 {
+  font-size: 14.5px;
+}
+.md h4 {
+  font-size: 13.5px;
+}
+.md ul,
+.md ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+.md li {
+  margin: 3px 0;
+  padding-left: 2px;
+}
+.md li::marker {
+  color: var(--muted);
+}
+.md strong {
+  font-weight: 650;
+  color: #fff;
+}
+.md code {
+  font-family: 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.88em;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+.md pre {
+  margin: 4px 0 10px;
+  background: #0a0a0b;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  overflow: auto;
+  white-space: pre;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.md pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+.md blockquote {
+  margin: 0 0 8px;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid rgba(255, 255, 255, 0.16);
+  color: #c7c7cc;
+}
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 12px 0;
+}
+.md-link {
+  color: #4da3ff;
+  text-decoration: none;
+  cursor: pointer;
+}
+.md-link:hover {
+  text-decoration: underline;
+}
+.md-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+.md-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(10, 132, 255, 0.12);
+  color: #8cc4ff;
+  font-size: 11.5px;
+  font-weight: 500;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.md-tool em {
+  font-style: normal;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.md-warn {
+  color: var(--orange);
+  font-size: 12px;
+  opacity: 0.85;
+}
+.thinking {
+  color: var(--muted);
+}
+.thinking::after {
+  content: '';
+  animation: dots 1.2s steps(4, end) infinite;
+}
+@keyframes dots {
+  0% {
+    content: '';
+  }
+  25% {
+    content: '.';
+  }
+  50% {
+    content: '..';
+  }
+  75% {
+    content: '...';
+  }
+}
+.chat-reply.md {
+  margin: 0 30px 0 2px;
+}
+
+/* ================================================================ macOS refinement layer
+   Later rules win the cascade, so this restyles shared primitives app-wide in one place. */
+
+/* Overlay-style scrollbars: thin, no arrow buttons, transparent track */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.16);
+  border: 3px solid transparent;
+  border-radius: 10px;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+.ex-body::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.14);
+}
+
+/* Expanded window: dark material with a hairline edge and soft depth (compact/peek stay pure-black Dynamic Island) */
+.island.expanded {
+  background: linear-gradient(180deg, #18181b 0%, #0d0d0f 140px, #0b0b0d 100%);
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.ex-head {
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+  padding: 12px 16px 11px 14px;
+}
+.ex-title strong {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+/* Segmented controls & tab bar: lifted, lighter thumb like AppKit */
+.tabs,
+.segmented {
+  background: rgba(118, 118, 128, 0.18);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.04);
+}
+.tab.active,
+.segmented button.active {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.14));
+  color: #fff;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.18);
+}
+.segmented button {
+  transition:
+    background 0.18s,
+    color 0.18s;
+}
+.segmented button:not(.active):hover,
+.tab:not(.active):hover {
+  color: #e5e5ea;
+}
+
+/* Fields: hairline border, soft focus ring */
+input,
+textarea,
+select {
+  background-color: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s,
+    background-color 0.15s;
+}
+input:hover,
+textarea:hover,
+select:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: rgba(10, 132, 255, 0.85);
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.28);
+  background-color: rgba(255, 255, 255, 0.07);
+}
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+}
+select {
+  appearance: none;
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24'%3E%3Cpath fill='%238e8e93' d='M7 9l5-5 5 5zM7 15l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+}
+
+/* Composer: one focus ring around the whole field, not an outline on the inner textarea */
+.composer {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.composer:focus-within {
+  border-color: rgba(10, 132, 255, 0.7);
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.2);
+}
+.composer textarea,
+.composer textarea:hover,
+.composer textarea:focus {
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+
+/* Buttons: subtle top highlight + resting shadow */
+.btn {
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.1),
+    0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.btn.primary {
+  background: linear-gradient(180deg, #2e97ff 0%, #0a7cff 100%);
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.35),
+    0 1px 3px rgba(10, 132, 255, 0.35);
+}
+.btn.green {
+  background: linear-gradient(180deg, #4ade72 0%, #30d158 100%);
+}
+.btn.red {
+  background: linear-gradient(180deg, #ff6259 0%, #ff453a 100%);
+}
+.btn.ghost {
+  background: rgba(255, 255, 255, 0.08);
+}
+.btn.ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  filter: none;
+}
+.btn:disabled {
+  box-shadow: none;
+}
+
+/* Chips: clickable ones get a hover state */
+.chip {
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.05);
+}
+button.chip {
+  transition: background 0.15s;
+}
+button.chip:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+}
+
+/* Cards: hairline edge, hover feedback on clickable headers */
+.run,
+.provider {
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.run.pending-approval {
+  border-color: rgba(255, 159, 10, 0.4);
+}
+.provider.active {
+  border-color: rgba(10, 132, 255, 0.5);
+}
+.run-head {
+  transition: background 0.15s;
+}
+.run-head:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+/* Answer on Home: one card, not a card inside a card */
+.answer {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
+.answer:has(> .run) {
+  padding: 2px;
+}
+.answer .run {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* Toggle: translucent track like macOS */
+.toggle {
+  background: rgba(120, 120, 128, 0.32);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+}
+.toggle.on {
+  background: var(--green);
+}
+
+/* Section labels: a touch quieter and tighter */
+.label {
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking::after {
+    animation: none;
+    content: '…';
+  }
 }

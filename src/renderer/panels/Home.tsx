@@ -4,6 +4,7 @@ import { NowPlaying } from '../components/Media'
 import { actOn, actionLabel } from '../suggest'
 import { Icon, Segmented, cleanErr, shortPath } from '../components/ui'
 import { RunCard } from './Agent'
+import { Markdown } from '../components/Markdown'
 import { MailList, MailReader } from './Mail'
 
 const EXAMPLES: Record<RunContext, string[]> = {
@@ -146,7 +147,11 @@ export function HomePanel({
           </button>
           {result.type === 'error' && <div className="alert error">{result.message}</div>}
           {result.type === 'opened' && <div className="alert info">{result.message}</div>}
-          {result.type === 'chat' && <p className="chat-reply">{result.text}</p>}
+          {result.type === 'chat' && (
+            <div className="chat-reply md">
+              <Markdown text={result.text} />
+            </div>
+          )}
           {result.type === 'mail' && <MailReader message={result.message} open={open} />}
           {result.type === 'mail-list' && (
             <>
