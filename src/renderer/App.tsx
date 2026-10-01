@@ -10,6 +10,7 @@ import { AgentPanel } from './panels/Agent'
 import { GitPanel } from './panels/Git'
 import { MailPanel } from './panels/Mail'
 import { UsagePanel } from './panels/Usage'
+import { SchedulerPanel } from './panels/Scheduler'
 import { SettingsPanel } from './panels/Settings'
 import { SecurityPanel } from './panels/Security'
 
@@ -25,6 +26,7 @@ const TABS: { id: PanelId; icon: string; label: string }[] = [
   { id: 'git', icon: 'git', label: 'Git' },
   { id: 'mail', icon: 'mail', label: 'Mail' },
   { id: 'usage', icon: 'usage', label: 'AI usage' },
+  { id: 'scheduler', icon: 'clock', label: 'Scheduler' },
   { id: 'settings', icon: 'settings', label: 'Settings' },
   { id: 'security', icon: 'shield', label: 'Security' }
 ]
@@ -231,14 +233,24 @@ export function App() {
 
   const animation = reaction ?? baseAnimation
   const atTopForNotice = !!dock && dock.edge !== 'top' && ((mode === 'peek' && !!notice) || (mode === 'expanded' && fromNotice))
-
+  // A notification while docked left/right/bottom never glides the pill across the screen. It mirrors the
+  // "tuck into edge" hide animation instead: shrink to the small tab at the current spot, move the (now
+  // tiny, unobtrusive) window while retracted, then grow back in at the top — and reverse on dismiss.
+  // 'retracted' is a transient mid-point; 'docked'/'top' are the settled states the rest of the render reads.
+  const RETRACT_MS = 260
+  const [edgePhase, setEdgePhase] = useState<'docked' | 'retracted' | 'top'>('docked')
   useEffect(() => {
-    window.island.setPeekActive(atTopForNotice)
+    setEdgePhase(p => (p === 'docked' && !atTopForNotice ? p : 'retracted'))
+    const t = window.setTimeout(() => {
+      window.island.setPeekActive(atTopForNotice)
+      setEdgePhase(atTopForNotice ? 'top' : 'docked')
+    }, RETRACT_MS)
+    return () => window.clearTimeout(t)
   }, [atTopForNotice])
 
   if (!snap || !dock) return null
 
-  const edge = atTopForNotice ? 'top' : dock.edge
+  const edge = edgePhase === 'top' ? 'top' : dock.edge
   const vertical = (edge === 'left' || edge === 'right') && !dragging
   // When docked right, flip the avatar so Isla looks toward the screen (left).
   const facingLeft = edge === 'right' && !dragging
@@ -250,7 +262,10 @@ export function App() {
   const sugCount = locked ? 0 : snap.suggestions.length
   const pillWidth = (mediaMode ? 470 : 250) + rings.length * RING + 26 + (sugCount ? 46 : 0)
   const compactStyle = vertical ? { height: (mediaMode ? 232 : 84) + rings.length * (RING + 4) + 30 + (sugCount ? 40 : 0) } : { width: pillWidth }
-  const showTab = dock.hidden && !dragging && !atTopForNotice
+  // Mid-transit to/from a top notice: shown as the same small tab shape as a manual hide, at the edge it's
+  // actually still anchored to (edge still reads dock.edge here — it only flips to 'top' once settled there)
+  // — this is what makes the retract/reveal read as "tuck away, then reappear" instead of a cross-screen glide.
+  const showTab = (dock.hidden && !dragging && edgePhase !== 'top') || edgePhase === 'retracted'
   const hideArrow = { top: 'up', bottom: 'down', left: 'left', right: 'right' }[edge]
   const showArrow = { top: 'down', bottom: 'up', left: 'right', right: 'left' }[edge]
 
@@ -343,13 +358,13 @@ export function App() {
     <div className={`stage dock-${edge} ${dragging ? 'dragging' : ''} ${landing ? 'landing' : ''}`}>
       {showTab ? (
         <div
-          className="island tab"
-          role="button"
+          className={`island tab ${edgePhase === 'retracted' ? 'transit' : ''}`}
+          role={dock.hidden ? 'button' : undefined}
           aria-label="Show Agentic Island"
-          title="Show Isla"
-          onMouseEnter={() => setInteractive(true)}
-          onMouseLeave={() => setInteractive(false)}
-          onClick={() => window.island.setHidden(false)}
+          title={dock.hidden ? 'Show Isla' : undefined}
+          onMouseEnter={() => dock.hidden && setInteractive(true)}
+          onMouseLeave={() => dock.hidden && setInteractive(false)}
+          onClick={() => dock.hidden && window.island.setHidden(false)}
         >
           <Icon name="chevron" size={14} className={`chev-${showArrow}`} />
           {pending.length > 0 && <i className="tab-dot orange" />}
@@ -490,6 +505,7 @@ export function App() {
                     {t.id === 'mail' && (snap.otps.length > 0 || snap.inbox.some(m => m.unread)) && (
                       <i className="badge blue">{snap.otps.length || snap.inbox.filter(m => m.unread).length}</i>
                     )}
+                    {t.id === 'scheduler' && snap.scheduledTasks.some(x => x.lastRunStatus === 'error') && <i className="badge">!</i>}
                   </button>
                 ))}
               </nav>
@@ -524,6 +540,7 @@ export function App() {
               {panel === 'git' && <GitPanel snap={snap} />}
               {panel === 'mail' && <MailPanel key={mailUid ?? 'inbox'} snap={snap} open={open} initialUid={mailUid} />}
               {panel === 'usage' && <UsagePanel limits={snap.limits} />}
+              {panel === 'scheduler' && <SchedulerPanel snap={snap} onTyping={setTyping} />}
               {panel === 'settings' && <SettingsPanel snap={snap} onTyping={setTyping} />}
               {panel === 'security' && <SecurityPanel snap={snap} />}
             </main>

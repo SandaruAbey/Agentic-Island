@@ -255,14 +255,13 @@ export class AgentManager {
     return this.procs.size
   }
 
-  /** Agent that answers General questions: the chosen one, else the active one if it can run headless, else the first installed. */
+  /** Agent that answers General questions: the user's chosen default agent (Settings → Agents & models), else the first installed headless one. */
   assistantProvider(): ProviderId | null {
     const s = this.getSettings()
     const ok = (id: ProviderId) => {
       const p = this.providers.find(x => x.id === id)
       return !!p?.installed && p.headless && s.providers[id].enabled
     }
-    if (s.assistant.provider !== 'auto' && ok(s.assistant.provider)) return s.assistant.provider
     if (ok(s.activeProvider)) return s.activeProvider
     return (['claude', 'codex', 'gemini', 'antigravity', 'custom'] as ProviderId[]).find(ok) ?? null
   }
@@ -420,16 +419,17 @@ export class AgentManager {
     let provider: ProviderId
     let workspace: string
     if (context === 'general') {
-      const p = this.assistantProvider()
+      const p = req.provider ?? this.assistantProvider()
       if (!p) throw new Error('No background-capable agent found. Install Claude Code, Codex CLI or Gemini CLI (Antigravity only works inside its IDE).')
       provider = p
       workspace = this.assistantDir
     } else {
       provider = req.provider ?? s.activeProvider
-      if (!s.activeWorkspace || !isInsideWorkspace(s.activeWorkspace, s.workspaces)) {
+      const ws = req.workspace ?? s.activeWorkspace
+      if (!ws || !isInsideWorkspace(ws, s.workspaces)) {
         throw new Error('Pick an allowlisted workspace first (Settings → Workspaces), or switch the composer to General.')
       }
-      workspace = s.activeWorkspace
+      workspace = ws
     }
     const cfg = s.providers[provider]
     if (!cfg.enabled) throw new Error(`${PROVIDERS[provider].label} is disabled in settings.`)

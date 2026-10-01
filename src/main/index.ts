@@ -30,6 +30,7 @@ import type {
   ModelUsage,
   RunContext,
   RunRequest,
+  ScheduledTaskInput,
   SecurityState,
   Settings,
   Suggestion
@@ -48,6 +49,7 @@ import { ScreenReader } from './screen'
 import { InsightEngine, redactScreen } from './insight'
 import { scanInstalledApps } from './apps'
 import { parseReminderIntent, parseReminderWithAi, parseToolTag, ReminderManager, formatTimeStr, formatDurationStr } from './reminders'
+import { parseScheduleIntent, TaskScheduler } from './scheduler'
 
 const KILL_SHORTCUT = 'Control+Alt+Shift+K'
 const TOGGLE_SHORTCUT = 'Control+Alt+Space'
@@ -102,6 +104,7 @@ const agents = new AgentManager(
   () => broadcastSoon(),
   (id, chunk) => send({ type: 'run-output', id, chunk }),
   run => {
+    if (run.scheduledTaskId) scheduler.onRunFinished(run)
     if (run.status === 'done') {
       const toolRem = parseToolTag(run.output)
       if (toolRem?.action === 'set' && toolRem.targetAt && toolRem.kind && toolRem.title) {
@@ -229,9 +232,25 @@ async function queueRun(req: RunRequest, extra: { screen?: string; screenApp?: s
   return run
 }
 
+const scheduler = new TaskScheduler({
+  getSettings,
+  setTasks: tasks => replaceSettings({ ...getSettings(), scheduledTasks: tasks }),
+  agents,
+  queueRun,
+  isInsideWorkspace,
+  isLocked: () => security.locked,
+  onChange: () => broadcastSoon(),
+  notify: send,
+  log: audit
+})
+
 const MAILISH_ONLY = /\b(my (inbox|e-?mails?|mails?)|unread)\b/i
 const MAILISH = /\b(e-?mails?|mails?|inbox|gmail|outlook)\b/i
 const AI_VERBS = /(summar|reply|respond|draft|translate|explain|write|answer|what should|important|action)/i
+/** Looks like it needs the live web (news/weather/prices/lookups), not a project/code question. */
+const WEB_QUERY = /\b(search|google|look\s*up|latest|news|weather|today'?s|current|price of|score of|who\s+(is|won)|what'?s\s+happening)\b/i
+/** A code/project signal that should keep the request in project context even if it also mentions "search" etc. (e.g. "search the codebase"). */
+const PROJECT_SIGNAL = /\b(code|codebase|repo|repository|file|function|bug|test|branch|commit|project|workspace|this (file|folder|repo))\b/i
 
 /** Run a proactive suggestion with the current screen text attached. */
 async function doSuggestion(id: string): Promise<AgentRun> {
@@ -308,6 +327,22 @@ async function ask(text: string, ctx: RunContext): Promise<AskResult> {
   if (chat) return { type: 'chat', text: chat }
 
   const model = getSettings().assistant.backgroundModel.trim()
+
+  // Recurring AI task from chat, e.g. "every morning at 9am search AI news and summarize it".
+  // Checked before reminders: "every day/morning/monday" + an actual task reads as a scheduled task, not a one-off alarm.
+  const taskDraft = parseScheduleIntent(t)
+  if (taskDraft) {
+    try {
+      const task = scheduler.create(taskDraft)
+      const when = task.recurrence.type === 'weekly' || task.recurrence.type === 'daily'
+        ? `at ${String(task.recurrence.hour).padStart(2, '0')}:${String(task.recurrence.minute).padStart(2, '0')}`
+        : 'on the interval you gave'
+      audit('scheduler.created-from-chat', task.title)
+      return { type: 'chat', text: `📅 **Scheduled**: "${task.title}" ${when}. You can pause, edit or delete it any time from the Scheduler tab.` }
+    } catch (e) {
+      return { type: 'error', message: (e as Error).message }
+    }
+  }
 
   // Natural language meeting, alarm, and reminder intents (instant regex check first)
   let remIntent = parseReminderIntent(t)
@@ -408,13 +443,19 @@ async function ask(text: string, ctx: RunContext): Promise<AskResult> {
     // Mail questions go to the AI with the newest emails attached (codes hidden).
     let mailUids: string[] | undefined
     if (MAILISH.test(t)) mailUids = (await needInbox()).slice(0, 6).map(m => m.uid)
+    // A project-context prompt that reads as a live web lookup (not a code/project question) gets web
+    // access instead of silently failing — project runs never get web tools (see queueRun's allowWeb),
+    // so staying in project context here would just have the agent say it can't search.
+    const rerouteToGeneral = ctx === 'project' && !mailUids && WEB_QUERY.test(t) && !PROJECT_SIGNAL.test(t)
+    const effectiveCtx: RunContext = mailUids ? 'general' : rerouteToGeneral ? 'general' : ctx
     // Typing a question and pressing Ask is the approval — as long as the task is read-only.
     // Only real change requests use the provider's edit mode, and those still show the approval card.
     const wantsChange = CHANGE_REQUEST.test(t)
+    if (rerouteToGeneral) audit('ask.reroute-general', t)
     return {
       type: 'run',
       run: await queueRun(
-        { prompt: t, title: t, context: mailUids ? 'general' : ctx, mailUids, mode: wantsChange ? undefined : 'readonly' },
+        { prompt: t, title: t, context: effectiveCtx, mailUids, mode: wantsChange ? undefined : 'readonly' },
         { approved: !mailUids }
       )
     }
@@ -464,7 +505,9 @@ function snapshot(): IslandSnapshot {
     screen: insight?.status ?? null,
     proposal: insight?.proposal ?? null,
     background: insight?.stats() ?? { callsLastHour: 0, limitPerHour: 0, tokensToday: 0, costToday: 0 },
-    version: app.getVersion()
+    version: app.getVersion(),
+    scheduledTasks: scheduler.list(),
+    schedulerStats: scheduler.stats()
   }
 }
 
@@ -509,6 +552,7 @@ function killSwitch(reason: string): void {
   context.stop()
   insight?.stop()
   media.stop()
+  scheduler.stop()
   void mail.stop()
   // Wipe any code we put on the clipboard.
   const codes = mail.otps.map(o => o.code)
@@ -539,6 +583,7 @@ function startWatchers(): void {
   if (s.assistant.contextAware) context.start()
   if (s.assistant.screenWatch) insight?.start()
   if (s.mediaControls) media.start()
+  scheduler.start()
 }
 
 async function shutdown(): Promise<void> {
@@ -547,6 +592,7 @@ async function shutdown(): Promise<void> {
   git.stop()
   context.stop()
   insight?.stop()
+  scheduler.stop()
   audit('app.shutdown', 'User shut down Agentic Island')
   quitting = true
   app.quit()
@@ -816,6 +862,26 @@ function registerIpc(): void {
   handle('run:cancel', (id: string) => agents.cancel(String(id)))
   handle('run:clear', () => agents.clearFinished())
 
+  handle('scheduler:create', (input: ScheduledTaskInput) => {
+    const t = scheduler.create(input)
+    broadcastSoon()
+    return t
+  })
+  handle('scheduler:update', (id: string, patch: Partial<ScheduledTaskInput> & { enabled?: boolean }) => {
+    const t = scheduler.update(String(id), patch)
+    broadcastSoon()
+    return t
+  })
+  handle('scheduler:delete', (id: string) => {
+    scheduler.delete(String(id))
+    broadcastSoon()
+  })
+  handle('scheduler:run-now', (id: string) => scheduler.runNow(String(id)))
+  handle('scheduler:toggle', (id: string, enabled: boolean) => {
+    scheduler.toggle(String(id), !!enabled)
+    broadcastSoon()
+  })
+
   handle('antigravity:open', async (prompt: string) => {
     const ws = getSettings().activeWorkspace
     if (security.locked) return { ok: false, message: 'Kill switch is engaged.' }
@@ -1021,28 +1087,40 @@ function topMiddleBounds(wa = dockDisplay().workArea): Electron.Rectangle {
   return { x: Math.round(ax - WIN_W / 2), y: wa.y, width: WIN_W, height: WIN_H }
 }
 
+/**
+ * Called once the renderer has already shrunk the pill to its small "tucked" tab shape (mirrors the manual
+ * hide/show animation) — so by now there is nothing eye-catching on screen to glide. Relocating the window
+ * is therefore done as an instant, invisible teleport (fade out → move → fade in) rather than any kind of
+ * visible glide across the display, which previously cut straight through the middle of the screen.
+ */
 let peekActive = false
 function setPeekActive(active: boolean): void {
   const s = getSettings()
   if (peekActive === active) return
   peekActive = active
-  if (s.dock.edge === 'top' || dragTimer) return
+  if (s.dock.edge === 'top' || dragTimer || !win || win.isDestroyed()) return
 
-  if (active) {
-    const top = topMiddleBounds()
-    void animateTo({ x: top.x, y: top.y }, 260, false).then(() => {
-      if (win && !win.isDestroyed() && peekActive) win.setBounds(top)
-    })
-  } else {
-    const docked = dockBounds(s.dock)
-    void animateTo({ x: docked.x, y: docked.y }, 260, false).then(() => {
-      // Snap to exact pixel bounds — prevents DPI rounding from pushing past the right/bottom edge.
-      if (win && !win.isDestroyed() && !dragTimer && !peekActive) {
-        win.setBounds(docked)
-        win.setIgnoreMouseEvents(true, { forward: true })
+  const target = active ? topMiddleBounds() : dockBounds(s.dock)
+  const w = win
+  const fadeSteps = 6
+  const fade = (from: number, to: number, cb?: () => void) => {
+    let i = 0
+    const t = setInterval(() => {
+      i++
+      if (w.isDestroyed()) return clearInterval(t)
+      w.setOpacity(from + ((to - from) * i) / fadeSteps)
+      if (i >= fadeSteps) {
+        clearInterval(t)
+        cb?.()
       }
-    })
+    }, 10)
   }
+  fade(1, 0, () => {
+    if (w.isDestroyed()) return
+    w.setBounds(target)
+    if (!active) w.setIgnoreMouseEvents(!dragTimer, { forward: true })
+    fade(0, 1)
+  })
 }
 
 function startDrag(w: number, h: number, ox: number, oy: number): void {
@@ -1207,6 +1285,7 @@ app.on('before-quit', () => {
   context.stop()
   media.stop()
   insight?.stop()
+  scheduler.stop()
 })
 app.on('will-quit', () => globalShortcut.unregisterAll())
 app.on('window-all-closed', () => {
