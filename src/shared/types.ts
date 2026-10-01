@@ -497,7 +497,7 @@ export interface IslandApi {
   dragStart(pillWidth: number, pillHeight: number, offsetX: number, offsetY: number): void
   dragEnd(): void
   setHidden(hidden: boolean): void
-  setPeekActive(active: boolean): void
+  setPeekActive(active: boolean): Promise<boolean>
   mediaControl(cmd: 'toggle' | 'next' | 'prev'): void
   updateSettings(patch: DeepPartial<Settings>): Promise<Settings>
   setMailPassword(password: string): Promise<boolean>

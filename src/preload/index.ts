@@ -17,7 +17,7 @@ const api: IslandApi = {
   dragStart: (w, h, ox, oy) => ipcRenderer.send('dock:drag-start', { w, h, ox, oy }),
   dragEnd: () => ipcRenderer.send('dock:drag-end'),
   setHidden: hidden => ipcRenderer.send('dock:hidden', hidden === true),
-  setPeekActive: active => ipcRenderer.send('dock:peek-active', active === true),
+  setPeekActive: active => invoke('dock:peek-active', active === true),
   mediaControl: cmd => ipcRenderer.send('media:control', cmd),
   updateSettings: patch => invoke('settings:update', patch),
   setMailPassword: pw => invoke('mail:set-password', pw),

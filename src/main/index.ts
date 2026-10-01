@@ -693,8 +693,8 @@ function registerIpc(): void {
   ipcMain.on('dock:hidden', (e, hidden: unknown) => {
     if (trusted(e)) setHidden(hidden === true)
   })
-  ipcMain.on('dock:peek-active', (e, active: unknown) => {
-    if (trusted(e)) setPeekActive(active === true)
+  handle('dock:peek-active', (active: unknown) => {
+    return setPeekActive(active === true)
   })
 
   ipcMain.on('set-interactive', (e, interactive: unknown) => {
@@ -1094,33 +1094,15 @@ function topMiddleBounds(wa = dockDisplay().workArea): Electron.Rectangle {
  * visible glide across the display, which previously cut straight through the middle of the screen.
  */
 let peekActive = false
-function setPeekActive(active: boolean): void {
+function setPeekActive(active: boolean): boolean {
   const s = getSettings()
-  if (peekActive === active) return
   peekActive = active
-  if (s.dock.edge === 'top' || dragTimer || !win || win.isDestroyed()) return
+  if (s.dock.edge === 'top' || dragTimer || !win || win.isDestroyed()) return true
 
   const target = active ? topMiddleBounds() : dockBounds(s.dock)
-  const w = win
-  const fadeSteps = 6
-  const fade = (from: number, to: number, cb?: () => void) => {
-    let i = 0
-    const t = setInterval(() => {
-      i++
-      if (w.isDestroyed()) return clearInterval(t)
-      w.setOpacity(from + ((to - from) * i) / fadeSteps)
-      if (i >= fadeSteps) {
-        clearInterval(t)
-        cb?.()
-      }
-    }, 10)
-  }
-  fade(1, 0, () => {
-    if (w.isDestroyed()) return
-    w.setBounds(target)
-    if (!active) w.setIgnoreMouseEvents(!dragTimer, { forward: true })
-    fade(0, 1)
-  })
+  win.setBounds(target)
+  if (!active) win.setIgnoreMouseEvents(!dragTimer, { forward: true })
+  return true
 }
 
 function startDrag(w: number, h: number, ox: number, oy: number): void {
@@ -1185,6 +1167,11 @@ async function endDrag(): Promise<void> {
 function setHidden(hidden: boolean): void {
   const dock = { ...getSettings().dock, hidden }
   replaceSettings({ ...getSettings(), dock })
+  peekActive = false
+  if (win && !win.isDestroyed() && !dragTimer) {
+    win.setBounds(dockBounds(dock))
+    win.setIgnoreMouseEvents(true, { forward: true })
+  }
   send({ type: 'dock', dock })
   broadcastSoon()
 }
