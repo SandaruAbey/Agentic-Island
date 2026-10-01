@@ -421,9 +421,10 @@ export type IslandEvent =
   | { type: 'run-output'; id: string; chunk: string }
   | { type: 'dock'; dock: DockState }
   | { type: 'media'; media: MediaState | null }
-  | { type: 'notify'; kind: 'otp' | 'mail' | 'run-done' | 'run-error' | 'security' | 'info' | 'suggest' | 'commit'
+  | { type: 'notify'; kind: 'otp' | 'mail' | 'run-done' | 'run-error' | 'security' | 'info' | 'suggest' | 'commit' | 'reminder'
       title: string
       body: string
+      url?: string
       uid?: string
       suggestionId?: string
       /** For suggestion peeks: which kind, so Isla's face can match it. */
@@ -441,6 +442,7 @@ export interface IslandApi {
   dragStart(pillWidth: number, pillHeight: number, offsetX: number, offsetY: number): void
   dragEnd(): void
   setHidden(hidden: boolean): void
+  setPeekActive(active: boolean): void
   mediaControl(cmd: 'toggle' | 'next' | 'prev'): void
   updateSettings(patch: DeepPartial<Settings>): Promise<Settings>
   setMailPassword(password: string): Promise<boolean>

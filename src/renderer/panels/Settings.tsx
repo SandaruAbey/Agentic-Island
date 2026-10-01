@@ -521,7 +521,7 @@ function General({ s, snap }: { s: Settings; snap: IslandSnapshot }) {
           <span>Background model (cheap is best)</span>
           <input
             defaultValue={s.assistant.backgroundModel}
-            placeholder="haiku"
+            placeholder={s.assistant.provider === 'claude' ? 'haiku' : 'gemini-3.8-flash'}
             spellCheck={false}
             onBlur={e => e.target.value.trim() !== s.assistant.backgroundModel && setA({ backgroundModel: e.target.value.trim() })}
           />

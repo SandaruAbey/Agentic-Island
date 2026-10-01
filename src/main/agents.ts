@@ -18,9 +18,46 @@ const PROVIDERS: Record<ProviderId, { label: string; bin: string[]; headless: bo
     label: 'Antigravity CLI',
     bin: ['agy', 'antigravity', 'antigravity-cli'],
     headless: true,
-    models: ['gemini-3.8-flash', 'gemini-3.8-pro', 'claude-opus-4-6', 'claude-sonnet-4-6', 'gemini-2.5-pro', 'gemini-2.5-flash']
+    models: [
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
+      'gemini-3.6-flash',
+      'gemini-3.1-pro',
+      'claude-sonnet-4.6',
+      'claude-opus-4.6',
+      'gpt-oss-120b'
+    ]
   },
   custom: { label: 'Custom CLI', bin: [], headless: true, models: [] }
+}
+
+export function sanitizeAntigravityModel(model?: string): { modelName: string; effort?: string } {
+  const m = (model || '').trim().toLowerCase()
+  if (!m || m === 'haiku' || m === 'default' || m === 'cheap' || m.startsWith('claude-3') || m.startsWith('gpt-4')) {
+    return { modelName: 'gemini-3.8-flash', effort: 'high' }
+  }
+  if (m.includes('3.8') || m.includes('gemini-3.8-flash')) {
+    return { modelName: 'gemini-3.8-flash', effort: 'high' }
+  }
+  if (m.includes('3.7') || m.includes('gemini-3.7-flash')) {
+    return { modelName: 'gemini-3.7-flash', effort: 'high' }
+  }
+  if (m.includes('3.6') || m.includes('gemini-3.6-flash')) {
+    return { modelName: 'gemini-3.6-flash', effort: 'high' }
+  }
+  if (m.includes('3.1') || m.includes('gemini-3.1-pro')) {
+    return { modelName: 'gemini-3.1-pro', effort: 'high' }
+  }
+  if (m.includes('claude-sonnet-4') || m.includes('sonnet-4.6')) {
+    return { modelName: 'claude-sonnet-4.6' }
+  }
+  if (m.includes('claude-opus-4') || m.includes('opus-4.6')) {
+    return { modelName: 'claude-opus-4.6' }
+  }
+  if (m.includes('gpt-oss')) {
+    return { modelName: 'gpt-oss-120b' }
+  }
+  return { modelName: model!.trim() }
 }
 
 const MAX_RUN_MS = 15 * 60_000
@@ -254,8 +291,14 @@ export class AgentManager {
       args = ['--approval-mode', 'default', ...(model ? ['-m', model] : [])]
       input = `${system}\n\n${prompt}`
     } else if (id === 'antigravity') {
-      args = ['--print', '--dangerously-skip-permissions']
-      input = `${system}\n\n${prompt}`
+      args = []
+      const agy = sanitizeAntigravityModel(model)
+      if (agy.modelName) {
+        args.push('--model', agy.modelName)
+        if (agy.effort) args.push('--effort', agy.effort)
+      }
+      args.push('--print', `${system}\n\n${prompt}`)
+      input = ''
     } else {
       args = this.getSettings().providers.custom.args.map(x => x.replaceAll('{model}', model))
       input = `${system}\n\n${prompt}`
@@ -269,15 +312,20 @@ export class AgentManager {
       }
       this.procs.set(`quick-${Date.now()}`, child)
       let out = ''
+      let errOut = ''
       const timer = setTimeout(() => {
         killTree(child.pid)
         rej(new Error('Background check timed out.'))
       }, 90_000)
       child.stdout?.on('data', (d: Buffer) => (out += d.toString('utf8')))
+      child.stderr?.on('data', (d: Buffer) => (errOut += d.toString('utf8')))
       child.on('error', e => rej(e))
-      child.on('close', () => {
+      child.on('close', code => {
         clearTimeout(timer)
         for (const [k, v] of this.procs) if (v === child) this.procs.delete(k)
+        if (code !== 0 && code !== null) {
+          return rej(new Error(errOut.trim() || out.trim() || `Agent exited with code ${code}`))
+        }
         if (id === 'claude') {
           try {
             const j = JSON.parse(out.trim().split(/\r?\n/).pop() ?? '{}')
@@ -318,10 +366,14 @@ export class AgentManager {
     if (locked) throw new Error('Kill switch is engaged. Resume the island first.')
     const provider = this.assistantProvider()
     if (!provider) throw new Error('No background-capable agent found. Install or sign in to Claude Code, Codex CLI or Gemini CLI.')
+    let effectiveModel = model || this.getSettings().providers[provider].model
+    if (provider === 'antigravity') {
+      effectiveModel = sanitizeAntigravityModel(effectiveModel).modelName
+    }
     const run: AgentRun = {
       id: randomUUID(),
       provider,
-      model: model || this.getSettings().providers[provider].model,
+      model: effectiveModel,
       mode: 'readonly',
       workspace: this.assistantDir,
       prompt,
@@ -337,7 +389,7 @@ export class AgentManager {
     this.runs = this.runs.slice(0, 30)
     this.log('run.lite', run.title)
     this.onChange()
-    this.quickAsk(system, prompt, model)
+    this.quickAsk(system, prompt, effectiveModel)
       .then(r => {
         run.output = r.text.trim() || '(no answer)'
         run.usage = { input: r.tokens, output: 0, cacheRead: 0, cacheWrite: 0 }
@@ -426,7 +478,7 @@ export class AgentManager {
     if (!status.headless) throw new Error('This provider cannot run headless. Use "Open in Antigravity".')
     if (!SAFE_MODEL.test(run.model)) throw new Error('Model id contains invalid characters.')
 
-    const args = this.buildArgs(run.provider, run.model, run.mode, run.allowWeb)
+    const args = this.buildArgs(run.provider, run.model, run.mode, run.allowWeb, run.prompt)
     this.log('run.approved', `${run.title} → ${status.path} ${args.join(' ')} (cwd ${run.workspace})`)
     run.status = 'running'
     run.startedAt = Date.now()
@@ -441,7 +493,9 @@ export class AgentManager {
       return
     }
     this.procs.set(run.id, child)
-    child.stdin?.end(run.prompt + '\n')
+    if (run.provider !== 'antigravity') {
+      child.stdin?.end(run.prompt + '\n')
+    }
 
     let lineBuf = ''
     const append = (text: string) => {
@@ -457,8 +511,7 @@ export class AgentManager {
     })
     child.stderr?.on('data', (d: Buffer) => {
       const t = d.toString('utf8')
-      // Hide noisy progress output; keep real errors.
-      if (/error|denied|not found|invalid|unauthori[sz]ed|login|auth/i.test(t)) append(`⚠ ${t}`)
+      append(`⚠ ${t}`)
     })
     const timer = setTimeout(() => this.cancel(run.id, 'timeout'), MAX_RUN_MS)
     child.on('error', err => append(`\n⚠ ${err.message}\n`))
@@ -478,7 +531,7 @@ export class AgentManager {
     this.onChange()
   }
 
-  private buildArgs(provider: ProviderId, model: string, mode: AgentMode, allowWeb: boolean): string[] {
+  private buildArgs(provider: ProviderId, model: string, mode: AgentMode, allowWeb: boolean, prompt?: string): string[] {
     const s = this.getSettings()
     switch (provider) {
       case 'claude': {
@@ -516,8 +569,20 @@ export class AgentManager {
         return a
       }
       case 'antigravity': {
-        const a = ['--print']
-        if (mode === 'edit') a.push('--dangerously-skip-permissions')
+        const a: string[] = []
+        const agy = sanitizeAntigravityModel(model)
+        if (agy.modelName) {
+          a.push('--model', agy.modelName)
+          if (agy.effort) {
+            a.push('--effort', agy.effort)
+          }
+        }
+        if (mode === 'edit') {
+          a.push('--mode', 'accept-edits', '--dangerously-skip-permissions')
+        } else {
+          a.push('--mode', 'plan')
+        }
+        a.push('--print', prompt || '')
         return a
       }
       case 'custom':
@@ -617,7 +682,7 @@ export class AgentManager {
 
 /** Turn "not signed in" failures into one clear instruction. */
 function signInHint(provider: ProviderId, output: string): string | null {
-  if (!/auth method|not logged in|please run \/login|login required|unauthori[sz]ed|api key|GEMINI_API_KEY|OPENAI_API_KEY|401/i.test(output)) return null
+  if (!/auth method|not logged in|please run \/login|please sign in|sign in|login required|unauthori[sz]ed|api key|GEMINI_API_KEY|OPENAI_API_KEY|401/i.test(output)) return null
   switch (provider) {
     case 'gemini':
       return 'Gemini CLI is not signed in. Open a terminal, run "gemini" once and choose "Login with Google" — then ask again.'
@@ -625,6 +690,8 @@ function signInHint(provider: ProviderId, output: string): string | null {
       return 'Claude Code is not signed in. Open a terminal, run "claude" and use /login — then ask again.'
     case 'codex':
       return 'Codex CLI is not signed in. Open a terminal and run "codex login" — then ask again.'
+    case 'antigravity':
+      return 'Antigravity CLI is not signed in. Open a terminal, run "agy" to sign in — then ask again.'
     default:
       return 'This agent is not signed in. Run it once in a terminal to sign in, then ask again.'
   }

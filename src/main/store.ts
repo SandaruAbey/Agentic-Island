@@ -45,7 +45,7 @@ export const defaultSettings: Settings = {
     screenWatch: true,
     aiInsights: true,
     aiChecksPerHour: 10,
-    backgroundModel: 'haiku',
+    backgroundModel: 'gemini-3.8-flash',
     autoReviewCommits: true,
     webApprovalRequired: true
   }

@@ -7,6 +7,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  Notification,
   screen,
   session,
   shell,
@@ -46,6 +47,7 @@ import { MediaWatcher } from './media'
 import { ScreenReader } from './screen'
 import { InsightEngine, redactScreen } from './insight'
 import { scanInstalledApps } from './apps'
+import { parseReminderIntent, parseReminderWithAi, parseToolTag, ReminderManager, formatTimeStr, formatDurationStr } from './reminders'
 
 const KILL_SHORTCUT = 'Control+Alt+Shift+K'
 const TOGGLE_SHORTCUT = 'Control+Alt+Space'
@@ -62,11 +64,36 @@ const dismissed = new Set<string>()
 let lastPredictAt = 0
 let predictTimer: NodeJS.Timeout | null = null
 
+const reminders = new ReminderManager(rem => {
+  audit('reminder.triggered', `${rem.kind}: ${rem.title}${rem.url ? ` (${rem.url})` : ''}`)
+  if (Notification.isSupported()) {
+    new Notification({
+      title: rem.kind === 'meeting' ? `Meeting now: ${rem.title}` : `Alarm: ${rem.title}`,
+      body: rem.url ? `${rem.title}\nJoin: ${rem.url}` : `${rem.title} · Time is up!`
+    }).show()
+  }
+  send({
+    type: 'notify',
+    kind: 'reminder',
+    title: rem.kind === 'meeting' ? `Meeting: ${rem.title}` : `Alarm: ${rem.title}`,
+    body: rem.url ? `Starts now · ${rem.url}` : `Time is up! · ${rem.title}`,
+    url: rem.url,
+    icon: 'spark'
+  })
+  if (win) {
+    setHidden(false)
+  }
+})
+
 if (!app.requestSingleInstanceLock()) {
   app.quit()
   process.exit(0)
 }
 app.setAppUserModelId('com.agenticisland.app')
+// Prevent Chromium WebRTC WGC 5000ms capture timeouts on minimized/protected windows
+app.commandLine.appendSwitch('disable-features', 'WebRtcAllowWgcWindowCapturer,WebRtcAllowWgcScreenCapturer')
+// Silence non-fatal WebRTC capture errors (e.g. CreateForWindow on NULL HWND)
+app.commandLine.appendSwitch('log-level', '3')
 
 // ---------------------------------------------------------------- services
 
@@ -75,7 +102,21 @@ const agents = new AgentManager(
   () => broadcastSoon(),
   (id, chunk) => send({ type: 'run-output', id, chunk }),
   run => {
-    if (run.status === 'done') send({ type: 'notify', kind: 'run-done', title: 'Task finished', body: run.title })
+    if (run.status === 'done') {
+      const toolRem = parseToolTag(run.output)
+      if (toolRem?.action === 'set' && toolRem.targetAt && toolRem.kind && toolRem.title) {
+        reminders.add(toolRem.kind, toolRem.title, toolRem.targetAt, toolRem.url)
+        send({
+          type: 'notify',
+          kind: 'reminder',
+          title: `${toolRem.kind === 'meeting' ? 'Meeting' : 'Alarm'} scheduled by AI`,
+          body: `${toolRem.title} at ${formatTimeStr(toolRem.targetAt)}`,
+          url: toolRem.url,
+          icon: 'spark'
+        })
+      }
+      send({ type: 'notify', kind: 'run-done', title: 'Task finished', body: run.title })
+    }
     else if (run.status === 'error') send({ type: 'notify', kind: 'run-error', title: 'Task failed', body: run.title })
   },
   audit
@@ -142,7 +183,9 @@ function followProject(a: ActivityContext): void {
 
 const GENERAL_PREAMBLE =
   "You are Isla, a friendly desktop assistant on the user's Windows PC. Answer directly and concisely in plain text (short paragraphs or bullet points, no heavy markdown). " +
-  'You cannot send emails, click, or change anything on the PC. When the user wants a reply, message or document, write a ready-to-copy draft.'
+  "You have access to Isla's built-in reminder and alarm tool. When the user asks to schedule a meeting, set an alarm, or set a reminder, call the tool by outputting:\n" +
+  "[TOOL:REMINDER kind=\"meeting|alarm|reminder\" title=\"...\" at=\"HH:MM am/pm or in X mins\" url=\"...\"]\n" +
+  "When the user wants a reply, message or document, write a ready-to-copy draft."
 
 /** IMAP uids (digits) or Gmail ids (hex) — nothing else is accepted from the renderer. */
 const isMailId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v)
@@ -263,7 +306,45 @@ async function ask(text: string, ctx: RunContext): Promise<AskResult> {
   // Small talk never needs an agent (no tokens, no approval).
   const chat = smallTalk(t)
   if (chat) return { type: 'chat', text: chat }
+
   const model = getSettings().assistant.backgroundModel.trim()
+
+  // Natural language meeting, alarm, and reminder intents (instant regex check first)
+  let remIntent = parseReminderIntent(t)
+  if (!remIntent && /\b(meet|meeting|alarm|remind|reminder|schedule|sync)\b/i.test(t)) {
+    // AI tool fallback to understand complex natural language requests
+    remIntent = await parseReminderWithAi(t, (sys, p, m) => agents.quickAsk(sys, p, m), model)
+  }
+  if (remIntent) {
+    if (remIntent.action === 'list') {
+      const active = reminders.list()
+      if (!active.length) {
+        return { type: 'chat', text: 'You have no upcoming meetings or alarms set.' }
+      }
+      const lines = active.map(r => {
+        const icon = r.kind === 'meeting' ? '📅' : r.kind === 'alarm' ? '⏰' : '🔔'
+        const time = formatTimeStr(r.targetAt)
+        const left = formatDurationStr(r.targetAt - Date.now())
+        return `• ${icon} **${r.title}** at ${time} (in ${left})${r.url ? `\n  🔗 ${r.url}` : ''}`
+      })
+      return { type: 'chat', text: `Upcoming reminders:\n${lines.join('\n')}` }
+    }
+    if (remIntent.action === 'clear') {
+      reminders.clear()
+      return { type: 'chat', text: 'Cleared all scheduled alarms and meeting reminders.' }
+    }
+    if (remIntent.action === 'set' && remIntent.targetAt && remIntent.kind && remIntent.title) {
+      const scheduled = reminders.add(remIntent.kind, remIntent.title, remIntent.targetAt, remIntent.url)
+      const timeStr = formatTimeStr(scheduled.targetAt)
+      const durationStr = formatDurationStr(scheduled.targetAt - Date.now())
+      const icon = scheduled.kind === 'meeting' ? '📅' : scheduled.kind === 'alarm' ? '⏰' : '🔔'
+      const label = scheduled.kind === 'meeting' ? 'Meeting reminder' : scheduled.kind === 'alarm' ? 'Alarm' : 'Reminder'
+      const msg = `${icon} **${label} saved** for **${timeStr}** (in ${durationStr}):\n"${scheduled.title}"${scheduled.url ? `\n\n🔗 Meeting link: ${scheduled.url}` : ''}\n\nI will pop up an alert with a Join button when it's time!`
+      audit('reminder.scheduled', `${scheduled.kind} at ${timeStr}: ${scheduled.title}`)
+      return { type: 'chat', text: msg }
+    }
+  }
+
   // Translation is a cheap text job.
   const tr = parseTranslate(t)
   if (tr) {
@@ -360,16 +441,16 @@ function snapshot(): IslandSnapshot {
     suggestions:
       getSettings().proactive.enabled && !security.locked
         ? [
-            ...(insight?.suggestions ?? []).filter(x => !dismissed.has(x.id)),
-            ...commitSuggestion().filter(x => !dismissed.has(x.id)),
-            // Once the auto-review exists, the generic "draft message"/"review" cards are redundant.
-            ...buildSuggestions(git.state, mail.otps, agents.runs, dismissed, {
+          ...(insight?.suggestions ?? []).filter(x => !dismissed.has(x.id)),
+          ...commitSuggestion().filter(x => !dismissed.has(x.id)),
+          // Once the auto-review exists, the generic "draft message"/"review" cards are redundant.
+          ...buildSuggestions(git.state, mail.otps, agents.runs, dismissed, {
             activity: context.current,
             mailStatus: mail.status,
             inbox: mail.inbox,
             activeProject: getSettings().activeWorkspace ? basename(getSettings().activeWorkspace!) : null
           }).filter(x => !(commitSuggestion().length && /^(commit|review):[^:]+:/.test(x.id)))
-          ].slice(0, 7)
+        ].slice(0, 7)
         : [],
     security,
     mailStatus: mail.status,
@@ -566,6 +647,9 @@ function registerIpc(): void {
   ipcMain.on('dock:hidden', (e, hidden: unknown) => {
     if (trusted(e)) setHidden(hidden === true)
   })
+  ipcMain.on('dock:peek-active', (e, active: unknown) => {
+    if (trusted(e)) setPeekActive(active === true)
+  })
 
   ipcMain.on('set-interactive', (e, interactive: unknown) => {
     if (!trusted(e) || !win) return
@@ -676,16 +760,17 @@ function registerIpc(): void {
       : { ok: false, message: `Copied — click into ${a.app} and press Ctrl+V.` }
   })
 
-  // Only a few well-known help pages can be opened from the UI.
+  // Open URLs in the user's default browser (supports Google Meet, Zoom, Teams, and web links)
   handle('open-url', async (url: string) => {
-    const allowed = ['myaccount.google.com', 'console.cloud.google.com', 'support.google.com', 'account.live.com', 'login.yahoo.com', 'account.apple.com', 'appleid.apple.com']
     let u: URL
     try {
       u = new URL(String(url))
     } catch {
       return
     }
-    if (u.protocol === 'https:' && allowed.includes(u.hostname)) await shell.openExternal(u.toString())
+    if (u.protocol === 'https:' || u.protocol === 'http:') {
+      await shell.openExternal(u.toString())
+    }
   })
 
   handle('workspace:add', async () => {
@@ -909,15 +994,18 @@ const easeOutBack = (t: number) => {
   return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2)
 }
 
-function animateTo(target: { x: number; y: number }, ms: number): Promise<void> {
+const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3)
+
+function animateTo(target: { x: number; y: number }, ms: number, useBack = true): Promise<void> {
   return new Promise(res => {
     if (!win) return res()
     if (animTimer) clearInterval(animTimer)
     const [sx, sy] = win.getPosition()
+    if (sx === target.x && sy === target.y) return res()
     const t0 = Date.now()
     animTimer = setInterval(() => {
       const t = Math.min(1, (Date.now() - t0) / ms)
-      const k = easeOutBack(t)
+      const k = useBack ? easeOutBack(t) : easeOutCubic(t)
       win?.setPosition(Math.round(sx + (target.x - sx) * k), Math.round(sy + (target.y - sy) * k))
       if (t >= 1) {
         clearInterval(animTimer!)
@@ -928,10 +1016,40 @@ function animateTo(target: { x: number; y: number }, ms: number): Promise<void> 
   })
 }
 
+function topMiddleBounds(wa = dockDisplay().workArea): Electron.Rectangle {
+  const ax = wa.x + wa.width / 2
+  return { x: Math.round(ax - WIN_W / 2), y: wa.y, width: WIN_W, height: WIN_H }
+}
+
+let peekActive = false
+function setPeekActive(active: boolean): void {
+  const s = getSettings()
+  if (peekActive === active) return
+  peekActive = active
+  if (s.dock.edge === 'top' || dragTimer) return
+
+  if (active) {
+    const top = topMiddleBounds()
+    void animateTo({ x: top.x, y: top.y }, 260, false).then(() => {
+      if (win && !win.isDestroyed() && peekActive) win.setBounds(top)
+    })
+  } else {
+    const docked = dockBounds(s.dock)
+    void animateTo({ x: docked.x, y: docked.y }, 260, false).then(() => {
+      // Snap to exact pixel bounds — prevents DPI rounding from pushing past the right/bottom edge.
+      if (win && !win.isDestroyed() && !dragTimer && !peekActive) {
+        win.setBounds(docked)
+        win.setIgnoreMouseEvents(true, { forward: true })
+      }
+    })
+  }
+}
+
 function startDrag(w: number, h: number, ox: number, oy: number): void {
   if (!win) return
   if (animTimer) clearInterval(animTimer)
   animTimer = null
+  peekActive = false
   drag = { w, h, ox, oy }
   const c = screen.getCursorScreenPoint()
   // Shrink the window to the pill so it can follow the cursor anywhere.
@@ -977,6 +1095,7 @@ async function endDrag(): Promise<void> {
           : { x: wa.x + wa.width - w - DRAG_M, y: big.y + WIN_H / 2 - h / 2 - DRAG_M }
   await animateTo({ x: Math.round(target.x), y: Math.round(target.y) }, 420)
   dockDisplayId = display.id
+  peekActive = false
   replaceSettings({ ...getSettings(), dock })
   send({ type: 'dock', dock })
   win.setBounds(big)

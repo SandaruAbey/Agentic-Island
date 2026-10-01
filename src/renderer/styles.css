@@ -52,6 +52,13 @@ button:disabled {
   outline-offset: 2px;
 }
 
+/* ---------------------------------------------------------------- avatar direction */
+
+/* When docked right, Isla faces left (toward the screen content). */
+.avatar-root.face-left {
+  transform: scaleX(-1);
+}
+
 /* ---------------------------------------------------------------- island shell */
 
 .stage {

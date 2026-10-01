@@ -10,7 +10,8 @@
                     "build":  "electron-vite build",
                     "typecheck":  "tsc --noEmit -p tsconfig.json",
                     "icon":  "node scripts/make-icon.mjs",
-                    "dist":  "npm run icon \u0026\u0026 electron-vite build \u0026\u0026 electron-builder --win --x64",
+                    "predist": "node -e \"try { require('child_process').execSync('taskkill /F /IM \\\"Agentic Island.exe\\\" /T', { stdio: 'ignore' }); } catch {}\"",
+                    "dist":  "npm run icon && electron-vite build && electron-builder --win --x64 && node scripts/create-installer-script.mjs",
                     "start":  "electron-vite preview"
                 },
     "dependencies":  {

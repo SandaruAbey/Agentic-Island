@@ -92,12 +92,30 @@ export class ScreenReader {
       if (perm && !perm.allowed) return { text: '', skipped: `Blocked by your app permissions — ${perm.name || activity.app} is not allowed` }
     }
     const { width, height } = eScreen.getPrimaryDisplay().size
-    const sources = await desktopCapturer.getSources({
-      types: ['window'],
-      thumbnailSize: { width: Math.min(width, 2200), height: Math.min(height, 1400) },
-      fetchWindowIcons: false
-    })
-    const src = sources.find(s => s.name === activity.title) ?? sources.find(s => activity.title && s.name.startsWith(activity.title.slice(0, 30)))
+    let sources: Electron.DesktopCapturerSource[] = []
+    try {
+      sources = await Promise.race([
+        desktopCapturer.getSources({
+          types: ['window', 'screen'],
+          thumbnailSize: { width: Math.min(width, 2200), height: Math.min(height, 1400) },
+          fetchWindowIcons: false
+        }),
+        new Promise<Electron.DesktopCapturerSource[]>((_, rej) => setTimeout(() => rej(new Error('Capture timed out')), 4000))
+      ])
+    } catch {
+      try {
+        sources = await desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: Math.min(width, 2200), height: Math.min(height, 1400) },
+          fetchWindowIcons: false
+        })
+      } catch {
+        return { text: '', skipped: 'Window could not be captured' }
+      }
+    }
+    const winSrc = sources.find(s => s.id.startsWith('window:') && (s.name === activity.title || (activity.title && s.name.startsWith(activity.title.slice(0, 30)))))
+    const screenSrc = sources.find(s => s.id.startsWith('screen:'))
+    const src = (winSrc && !winSrc.thumbnail.isEmpty()) ? winSrc : screenSrc
     if (!src || src.thumbnail.isEmpty()) return { text: '', skipped: 'Window could not be captured' }
     writeFileSync(this.file, src.thumbnail.toPNG())
     await this.startOcr()

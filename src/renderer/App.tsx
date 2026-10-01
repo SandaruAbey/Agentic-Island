@@ -37,7 +37,8 @@ const REACTION: Record<Notice['kind'], IslaAnimation> = {
   'run-done': 'success',
   'run-error': 'error',
   security: 'alert',
-  info: 'surprised'
+  info: 'surprised',
+  reminder: 'excited'
 }
 
 export function App() {
@@ -46,6 +47,7 @@ export function App() {
   const [panel, setPanel] = useState<PanelId>('home')
   const [pinned, setPinned] = useState(false)
   const [notice, setNotice] = useState<Notice | null>(null)
+  const [fromNotice, setFromNotice] = useState(false)
   const [reaction, setReaction] = useState<IslaAnimation | null>(null)
   const [typing, setTyping] = useState(false)
   const [mailUid, setMailUid] = useState<string | null>(null)
@@ -92,6 +94,7 @@ export function App() {
       else if (e.type === 'dock') {
         // Landed on an edge (or hidden/shown): new layout + a little squash-and-stretch.
         setDock(e.dock)
+        setFromNotice(false)
         draggingRef.current = false
         setDragging(false)
         interactive.current = false
@@ -120,6 +123,14 @@ export function App() {
       window.clearInterval(t)
     }
   }, [react])
+
+  useEffect(() => {
+    if (mode === 'peek' && !notice) setMode('compact')
+  }, [mode, notice])
+
+  useEffect(() => {
+    if (mode === 'compact' && fromNotice) setFromNotice(false)
+  }, [mode, fromNotice])
 
   // Click-through: the window only captures the mouse while the pointer is over the island itself.
   const enter = () => {
@@ -161,6 +172,8 @@ export function App() {
     window.clearTimeout(hoverTimer.current)
     draggingRef.current = true
     setDragging(true)
+    setFromNotice(false)
+    setNotice(null)
     setMode('compact')
     // While dragging the pill is always horizontal and compact.
     const w = pillWidth
@@ -184,6 +197,8 @@ export function App() {
   const locked = !!snap?.security.locked
   const idleMin = (now - lastActivity) / 60_000
 
+  const activityKind = snap?.activity?.kind ?? null
+
   const baseAnimation: IslaAnimation = useMemo(() => {
     if (locked) return 'sleeping'
     if (pending.length) return 'suspicious'
@@ -196,8 +211,15 @@ export function App() {
     if (snap?.git?.conflicted) return 'confused'
     if (idleMin > 20) return 'sleeping'
     if (idleMin > 8) return 'drowsy'
+    // Context-aware: react to what app the user is working in.
+    if (activityKind === 'ide') return 'searching'     // Watching code — attentive, scanning
+    if (activityKind === 'terminal') return 'working'   // Terminal work — focused
+    if (activityKind === 'browser') return 'idle'        // Web browsing — relaxed watching
+    if (activityKind === 'mail') return 'thinking'       // Reading mail — thoughtful
+    if (activityKind === 'chat') return 'listening'      // Chat app — listening in
+    if (activityKind === 'office') return 'idle'          // Documents — calm
     return 'idle'
-  }, [locked, pending.length, running, typing, mode, panel, snap?.git?.conflicted, idleMin, media?.status])
+  }, [locked, pending.length, running, typing, mode, panel, snap?.git?.conflicted, idleMin, media?.status, activityKind])
 
   useEffect(() => {
     if (baseAnimation === 'sleeping') wasAsleep.current = true
@@ -208,11 +230,18 @@ export function App() {
   }, [baseAnimation, react])
 
   const animation = reaction ?? baseAnimation
+  const atTopForNotice = !!dock && dock.edge !== 'top' && ((mode === 'peek' && !!notice) || (mode === 'expanded' && fromNotice))
+
+  useEffect(() => {
+    window.island.setPeekActive(atTopForNotice)
+  }, [atTopForNotice])
 
   if (!snap || !dock) return null
 
-  const edge = dock.edge
+  const edge = atTopForNotice ? 'top' : dock.edge
   const vertical = (edge === 'left' || edge === 'right') && !dragging
+  // When docked right, flip the avatar so Isla looks toward the screen (left).
+  const facingLeft = edge === 'right' && !dragging
   const idle = !locked && !running.length && !pending.length && !snap.otps.length
   const mediaMode = !!snap.settings.mediaControls && !!media && (media.status === 'Playing' || media.status === 'Paused') && idle
   mediaModeRef.current = mediaMode
@@ -221,7 +250,7 @@ export function App() {
   const sugCount = locked ? 0 : snap.suggestions.length
   const pillWidth = (mediaMode ? 470 : 250) + rings.length * RING + 26 + (sugCount ? 46 : 0)
   const compactStyle = vertical ? { height: (mediaMode ? 232 : 84) + rings.length * (RING + 4) + 30 + (sugCount ? 40 : 0) } : { width: pillWidth }
-  const showTab = dock.hidden && !dragging && !(mode === 'peek' && notice)
+  const showTab = dock.hidden && !dragging && !atTopForNotice
   const hideArrow = { top: 'up', bottom: 'down', left: 'left', right: 'right' }[edge]
   const showArrow = { top: 'down', bottom: 'up', left: 'right', right: 'left' }[edge]
 
@@ -260,9 +289,11 @@ export function App() {
     if (out.kind === 'run' || (out.kind === 'ask' && out.result.type === 'run')) {
       setFocusRun(out.kind === 'run' ? out.run.id : (out.result as { run: { id: string } }).run.id)
       setNotice(null)
+      setFromNotice(true)
       open('home')
     } else if (out.kind === 'ask' || out.kind === 'panel') {
       setNotice(null)
+      setFromNotice(true)
       open(out.kind === 'panel' ? out.panel : 'home')
     } else if (out.kind === 'info' || out.kind === 'error') {
       setPeekMsg(out.text)
@@ -335,7 +366,7 @@ export function App() {
       >
         {mode === 'compact' && (
           <div className="compact-row" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
-            <IslaAvatar animation={animation} size={30} ariaLabel={`Isla is ${animation}`} />
+            <IslaAvatar animation={animation} size={30} ariaLabel={`Isla is ${animation}`} className={facingLeft ? 'face-left' : ''} />
             {mediaMode && media ? (
               <>
                 <MediaPill m={media} vertical={vertical} />
@@ -377,7 +408,7 @@ export function App() {
 
         {mode === 'peek' && notice && (
           <div className="peek-row">
-            <IslaAvatar animation={animation} size={52} />
+            <IslaAvatar animation={animation} size={52} className={facingLeft ? 'face-left' : ''} />
             <div className="peek-text">
               <strong>{notice.title}</strong>
               <span className={notice.kind === 'otp' ? 'otp-inline' : ''}>{peekMsg ?? notice.body}</span>
@@ -392,7 +423,7 @@ export function App() {
                     </button>
                   ) : null
                 })()}
-                <button className="icon-btn" title="Not now" onClick={() => void window.island.dismissSuggestion(notice.suggestionId!).then(() => setNotice(null))}>
+                <button className="icon-btn" title="Not now" onClick={() => void window.island.dismissSuggestion(notice.suggestionId!).then(() => { setNotice(null); setMode('compact') })}>
                   <Icon name="close" size={13} />
                 </button>
               </div>
@@ -403,20 +434,31 @@ export function App() {
                     <Icon name="push" size={13} /> Commit & push
                   </button>
                 )}
-                <button className="btn ghost round" onClick={() => open('git')}>
+                <button className="btn ghost round" onClick={() => { setFromNotice(true); open('git') }}>
                   Details
                 </button>
               </div>
             ) : notice.kind === 'mail' && notice.uid ? (
-              <button className="btn primary round" onClick={() => openMail(notice.uid!)}>
+              <button className="btn primary round" onClick={() => { setFromNotice(true); openMail(notice.uid!) }}>
                 Read
               </button>
             ) : notice.kind === 'otp' && snap.otps[0] ? (
-              <button className="btn primary round" onClick={() => void window.island.copyOtp(snap.otps[0].id).then(() => setNotice(null))}>
+              <button className="btn primary round" onClick={() => void window.island.copyOtp(snap.otps[0].id).then(() => { setNotice(null); setMode('compact') })}>
                 <Icon name="copy" /> Copy
               </button>
+            ) : notice.kind === 'reminder' || notice.url ? (
+              <div className="peek-actions">
+                {notice.url && (
+                  <button className="btn green round" onClick={() => { void window.island.openUrl(notice.url!); setNotice(null); setMode('compact') }}>
+                    Join / Open
+                  </button>
+                )}
+                <button className="icon-btn" title="Dismiss" onClick={() => { setNotice(null); setMode('compact') }}>
+                  <Icon name="close" size={13} />
+                </button>
+              </div>
             ) : (
-              <button className="btn ghost round" onClick={() => open(notice.kind === 'security' ? 'security' : 'agent')}>
+              <button className="btn ghost round" onClick={() => { setFromNotice(true); open(notice.kind === 'security' ? 'security' : 'agent') }}>
                 Open
               </button>
             )}
@@ -426,7 +468,7 @@ export function App() {
         {mode === 'expanded' && (
           <div className="expanded">
             <header className="ex-head" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
-              <IslaAvatar animation={animation} size={46} />
+              <IslaAvatar animation={animation} size={46} className={facingLeft ? 'face-left' : ''} />
               <div className="ex-title" title="Drag to move Isla to any screen edge">
                 <strong>Isla</strong>
                 <span>{status}</span>
@@ -458,6 +500,7 @@ export function App() {
                 className="icon-btn"
                 title="Tuck into the edge"
                 onClick={() => {
+                  setFromNotice(false)
                   setMode('compact')
                   setInteractive(false)
                   window.island.setHidden(true)
