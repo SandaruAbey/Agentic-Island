@@ -248,7 +248,7 @@ export function App() {
   const [edgePhase, setEdgePhase] = useState<EdgePhase>('docked')
   const transitSeq = useRef(0)
 
-  const atTopForNotice = !!dock && dock.edge !== 'top' && (!!notice || (mode === 'expanded' && fromNotice))
+  const atTopForNotice = !!dock && dock.edge !== 'top' && ((mode !== 'expanded' && !!notice) || (mode === 'expanded' && fromNotice))
 
   useEffect(() => {
     if (!dock || dock.edge === 'top') {
@@ -295,7 +295,8 @@ export function App() {
 
   // At the side dock (left/right/bottom), while not yet at the top, NEVER render as 'peek'.
   // Keep the compact pill or tab shape so it simply tucks into the edge without flashing the notification banner at the side.
-  const effectiveMode = (dock.edge !== 'top' && edgePhase !== 'top' && !fromNotice) ? 'compact' : mode
+  // Expanded mode is always allowed so the user can open/interact with Isla at any docked edge.
+  const effectiveMode = (dock.edge !== 'top' && edgePhase !== 'top' && mode === 'peek') ? 'compact' : mode
   const edge = (edgePhase === 'top' || edgePhase === 'retracting-top') ? 'top' : dock.edge
   const isRetractingTop = edgePhase === 'retracting-top'
   const vertical = (edge === 'left' || edge === 'right') && !dragging
@@ -407,6 +408,7 @@ export function App() {
           aria-label="Show Agentic Island"
           title={dock.hidden && edgePhase !== 'retracting-dock' ? 'Show Isla' : undefined}
           onMouseEnter={() => dock.hidden && edgePhase !== 'retracting-dock' && setInteractive(true)}
+          onMouseMove={() => dock.hidden && edgePhase !== 'retracting-dock' && setInteractive(true)}
           onMouseLeave={() => dock.hidden && edgePhase !== 'retracting-dock' && setInteractive(false)}
           onClick={() => dock.hidden && edgePhase !== 'retracting-dock' && window.island.setHidden(false)}
         >
