@@ -22,6 +22,17 @@ export function redactScreen(text: string): string {
     .replace(/\b\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{4}\b/g, '[card hidden]')
 }
 
+/** Same window as when the screen was read (same app process and title). */
+function sameWindow(a: ActivityContext, b: ActivityContext | null): boolean {
+  return !!b && a.pid === b.pid && a.title === b.title
+}
+
+/** An open conversation: a message box, or several message timestamps. */
+function looksLikeConversation(text: string): boolean {
+  if (/(type a (new )?message|write a message|send a message|message @|message #|reply in thread|type your message|write a reply)/i.test(text)) return true
+  return (text.match(/\b\d{1,2}[:.]\d{2}\s?(am|pm|AM|PM)?\b/g) ?? []).length >= 3
+}
+
 function parseJson(text: string): Record<string, unknown> | null {
   const m = text.match(/\{[\s\S]*\}/)
   if (!m) return null
@@ -89,6 +100,14 @@ export class InsightEngine {
   /** Window focus changed — read it soon (debounced so alt-tabbing is free). */
   onActivity(): void {
     if (!this.timer) return
+    // Suggestions were made for the previous window/tab — never offer them on another page.
+    if (this.stable) clearTimeout(this.stable)
+    this.stable = null
+    this.lastHash = ''
+    if (this.suggestions.length) {
+      this.suggestions = []
+      this.d.onChange()
+    }
     if (this.nudge) clearTimeout(this.nudge)
     this.nudge = setTimeout(() => void this.tick(), 2500)
   }
@@ -146,6 +165,8 @@ export class InsightEngine {
         this.d.onChange()
         return
       }
+      // The user moved to another window or tab while the screen was being read: this text is stale.
+      if (!sameWindow(activity, this.d.getActivity())) return
       const hash = short(activity.title + '|' + text.replace(/\s+/g, ' ').slice(0, 4000))
       if (hash === this.lastHash) return
       this.lastHash = hash
@@ -212,8 +233,9 @@ export class InsightEngine {
         createdAt: now
       })
     }
-    // Teams / WhatsApp / Slack… (app or browser): suggest a reply to the latest message.
-    if (a.kind === 'chat' && text.length > 120) {
+    // Teams / WhatsApp / Slack… (app or browser): suggest a reply — only when a conversation is really open
+    // (a message box or several message timestamps), not on a chat app's home, search or settings page.
+    if (a.kind === 'chat' && text.length > 120 && looksLikeConversation(text)) {
       out.push({
         id: `chat-reply:${short(text.slice(-600))}`,
         title: `Suggest a reply in ${a.app}`,
@@ -256,9 +278,14 @@ export class InsightEngine {
       out.push({
         id: `browser-help:${short(a.title)}`,
         title: 'Need help with this page?',
-        detail: `Isla can read and assist with what\'s on ${a.app}`,
+        detail: 'Tell Isla what you need — it reads the page and does it.',
         icon: 'eye',
-        action: { type: 'do', title: `Help with: ${a.title.slice(0, 50)}`, prompt: 'Look at what is on my screen in the browser. Tell me what this page is about in one sentence, then ask what I would like help with. If you notice anything useful (forms, errors, instructions), mention it.' },
+        action: {
+          type: 'do',
+          title: `Help with: ${a.title.slice(0, 50)}`,
+          askUser: 'What do you want help with on this page?',
+          prompt: 'Use the page on my screen to do what I ask below. Be concise and practical; if I ask for text (a reply, a summary, a translation), output only that text.'
+        },
         createdAt: now
       })
     }
@@ -276,7 +303,7 @@ export class InsightEngine {
       )
       const j = parseJson(reply)
       if (!j || j.none || typeof j.title !== 'string' || typeof j.prompt !== 'string') return
-      if (hash !== this.lastHash) return // screen moved on
+      if (hash !== this.lastHash || !sameWindow(activity, this.d.getActivity())) return // screen moved on
       const sug: Suggestion = {
         id: `ai:${hash}`,
         title: j.title.slice(0, 80),

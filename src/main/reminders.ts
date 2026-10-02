@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import type { Reminder } from '@shared/types'
 
 export interface ScheduledReminder {
   id: string
@@ -239,36 +241,50 @@ export function formatDurationStr(ms: number): string {
   return `${secs}s`
 }
 
+/** Reminders missed by more than this while the app was closed are dropped instead of firing late. */
+const MISSED_GRACE_MS = 60 * 60_000
+
 export class ReminderManager {
   private items: ScheduledReminder[] = []
+  private file: string | null = null
 
-  constructor(private onTrigger: (reminder: ScheduledReminder) => void) {}
+  constructor(
+    private onTrigger: (reminder: ScheduledReminder) => void,
+    private onChange: () => void = () => {}
+  ) {}
+
+  /** Restore reminders saved by a previous session; ones missed only a little while ago fire right away. */
+  load(file: string): void {
+    this.file = file
+    let saved: ScheduledReminder[] = []
+    try {
+      if (existsSync(file)) saved = JSON.parse(readFileSync(file, 'utf8'))
+    } catch {
+      saved = []
+    }
+    const now = Date.now()
+    for (const r of Array.isArray(saved) ? saved : []) {
+      if (!r || typeof r.id !== 'string' || typeof r.targetAt !== 'number' || typeof r.title !== 'string') continue
+      if (r.targetAt < now - MISSED_GRACE_MS || this.items.some(x => x.id === r.id)) continue
+      const kind = r.kind === 'meeting' || r.kind === 'alarm' ? r.kind : 'reminder'
+      this.schedule({ id: r.id, kind, title: r.title.slice(0, 200), url: typeof r.url === 'string' ? r.url : undefined, targetAt: r.targetAt, createdAt: r.createdAt || now })
+    }
+    this.save()
+  }
 
   add(kind: ScheduledReminder['kind'], title: string, targetAt: number, url?: string): ScheduledReminder {
-    const id = randomUUID()
-    const now = Date.now()
-    const delay = Math.max(1000, targetAt - now)
-
-    const reminder: ScheduledReminder = {
-      id,
-      kind,
-      title,
-      url,
-      targetAt,
-      createdAt: now
-    }
-
-    reminder.timer = setTimeout(() => {
-      this.remove(id)
-      this.onTrigger(reminder)
-    }, delay)
-
-    this.items.push(reminder)
+    const reminder = this.schedule({ id: randomUUID(), kind, title, url, targetAt, createdAt: Date.now() })
+    this.changed()
     return reminder
   }
 
   list(): ScheduledReminder[] {
     return [...this.items].sort((a, b) => a.targetAt - b.targetAt)
+  }
+
+  /** Plain copies for the renderer (no timer handles). */
+  snapshot(): Reminder[] {
+    return this.list().map(({ id, kind, title, url, targetAt, createdAt }) => ({ id, kind, title, url, targetAt, createdAt }))
   }
 
   remove(id: string): boolean {
@@ -277,6 +293,7 @@ export class ReminderManager {
     const item = this.items[idx]
     if (item.timer) clearTimeout(item.timer)
     this.items.splice(idx, 1)
+    this.changed()
     return true
   }
 
@@ -285,5 +302,40 @@ export class ReminderManager {
       if (item.timer) clearTimeout(item.timer)
     }
     this.items = []
+    this.changed()
+  }
+
+  private schedule(reminder: ScheduledReminder): ScheduledReminder {
+    // setTimeout overflows past ~24.8 days; re-arm in steps for anything further out.
+    const arm = () => {
+      const left = reminder.targetAt - Date.now()
+      reminder.timer = setTimeout(
+        () => {
+          if (reminder.targetAt - Date.now() > 1000) return arm()
+          this.remove(reminder.id)
+          this.onTrigger(reminder)
+        },
+        Math.min(MAX_TIMER_MS, Math.max(1000, left))
+      )
+    }
+    arm()
+    this.items.push(reminder)
+    return reminder
+  }
+
+  private changed(): void {
+    this.save()
+    this.onChange()
+  }
+
+  private save(): void {
+    if (!this.file) return
+    try {
+      writeFileSync(this.file, JSON.stringify(this.snapshot()))
+    } catch {
+      /* best effort */
+    }
   }
 }
+
+const MAX_TIMER_MS = 2 ** 31 - 1

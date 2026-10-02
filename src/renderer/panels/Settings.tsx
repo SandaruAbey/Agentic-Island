@@ -25,6 +25,9 @@ export function SettingsPanel({ snap, onTyping }: { snap: IslandSnapshot; onTypi
       {tab === 'inbox' && <Inbox snap={snap} focus={focus} />}
       {tab === 'general' && <General s={snap.settings} snap={snap} />}
       {tab === 'permissions' && <AppPermissions snap={snap} />}
+      <p className="about">
+        Agentic Island v{snap.version} · © 2026 FiveNeurals. All rights reserved.
+      </p>
     </div>
   )
 }
@@ -451,6 +454,40 @@ function GoogleG() {
   )
 }
 
+function ConnectAgy({ connected }: { connected: boolean }) {
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  return (
+    <div className="row-between">
+      <div>
+        <strong>Use with Antigravity</strong>
+        <p className="muted small">
+          {connected
+            ? 'Connected — Antigravity CLI can run computer tasks with Isla’s tools.'
+            : 'Antigravity CLI keeps one global tool list. Connecting adds an “isla” entry there and allows its tools (rule mcp(isla/*)). Your own agy sessions see no Isla tools — they only appear in tasks Isla starts and you approve.'}
+        </p>
+        {msg && <p className="muted small">{msg}</p>}
+      </div>
+      {!connected && (
+        <button
+          className="btn ghost round sm"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true)
+            void window.island
+              .connectAntigravity()
+              .then(r => setMsg(r.message))
+              .catch(e => setMsg(cleanErr(e)))
+              .finally(() => setBusy(false))
+          }}
+        >
+          {busy ? 'Connecting…' : 'Connect'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 function General({ s, snap }: { s: Settings; snap: IslandSnapshot }) {
   const setA = (v: Partial<Settings['assistant']>) => void window.island.updateSettings({ assistant: v })
   return (
@@ -474,6 +511,26 @@ function General({ s, snap }: { s: Settings; snap: IslandSnapshot }) {
       </div>
       <div className="row-between">
         <div>
+          <strong>Earbuds & headphones</strong>
+          <p className="muted small">
+            Show connected Bluetooth earbuds or headphones and their battery on the island, with a peek when they connect or run low. Read from
+            Windows on this PC — nothing leaves it.
+          </p>
+        </div>
+        <Toggle label="Earbuds and headphones" checked={s.earbuds} onChange={v => void window.island.updateSettings({ earbuds: v })} />
+      </div>
+      <div className="row-between">
+        <div>
+          <strong>Link & image previews</strong>
+          <p className="muted small">
+            Show a title and picture for links and images in answers. Isla fetches them itself (public websites only — never your local network),
+            so the sites can see your IP address.
+          </p>
+        </div>
+        <Toggle label="Link and image previews" checked={s.assistant.linkPreviews} onChange={v => setA({ linkPreviews: v })} />
+      </div>
+      <div className="row-between">
+        <div>
           <strong>Read my screen</strong>
           <p className="muted small">
             Every ~20 s Isla reads the window in front with Windows’ built-in OCR — on this PC, free, no tokens. Password managers, banking and
@@ -482,6 +539,39 @@ function General({ s, snap }: { s: Settings; snap: IslandSnapshot }) {
         </div>
         <Toggle label="Read my screen" checked={s.assistant.screenWatch} onChange={v => setA({ screenWatch: v })} />
       </div>
+      <div className="row-between">
+        <div>
+          <strong>Computer control</strong>
+          <p className="muted small">
+            Let Isla do tasks on this PC for you (“go and read my emails”, “find my CV”, “open YouTube and…”). You approve every task first, and Isla
+            asks again before anything risky — sending, deleting, buying, submitting or opening programs. It works in the background: your inbox
+            connection, its own hidden browser, and Windows UI Automation, so your mouse and keyboard stay yours. Never types passwords. During an
+            approved task, what it reads (including screenshots) goes to your AI agent.
+          </p>
+        </div>
+        <Toggle label="Computer control" checked={s.computer.enabled} onChange={v => void window.island.updateSettings({ computer: { enabled: v } })} />
+      </div>
+      {s.computer.enabled && (
+        <>
+          <div className="row-between">
+            <div>
+              <strong>Real mouse & keyboard as a last resort</strong>
+              <p className="muted small">For apps that can’t be driven in the background. Every single click or keystroke is confirmed by you on the island.</p>
+            </div>
+            <Toggle label="Real mouse and keyboard" checked={s.computer.realInput} onChange={v => void window.island.updateSettings({ computer: { realInput: v } })} />
+          </div>
+          {snap.antigravityComputer !== null && <ConnectAgy connected={snap.antigravityComputer} />}
+          <div className="row-between">
+            <div>
+              <strong>Isla’s browser</strong>
+              <p className="muted small">A separate browser profile Isla uses for websites. Open it once to sign in (e.g. to Gmail) — the sign-in is remembered.</p>
+            </div>
+            <button className="btn ghost round sm" onClick={() => void window.island.showBrowser(!snap.browserOpen)}>
+              {snap.browserOpen ? 'Close' : 'Open & sign in'}
+            </button>
+          </div>
+        </>
+      )}
       <div className="row-between">
         <div>
           <strong>AI next-step ideas</strong>
@@ -505,10 +595,10 @@ function General({ s, snap }: { s: Settings; snap: IslandSnapshot }) {
           </select>
         </label>
         <label>
-          <span>Background model for quick checks (cheap is best)</span>
+          <span>Background model for quick checks (empty = same as your agent)</span>
           <input
             defaultValue={s.assistant.backgroundModel}
-            placeholder={snap.assistantProvider === 'claude' ? 'haiku' : 'gemini-3.8-flash'}
+            placeholder={`Same as your agent${snap.assistantProvider ? ` (${s.providers[snap.assistantProvider].model || 'default'})` : ''}`}
             spellCheck={false}
             onBlur={e => e.target.value.trim() !== s.assistant.backgroundModel && setA({ backgroundModel: e.target.value.trim() })}
           />

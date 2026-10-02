@@ -229,3 +229,11 @@ npm run dist       # builds release/AgenticIsland-Setup-<version>.exe
 | Task finished / failed | success / error |
 | Merge conflicts | confused |
 | Security alert | alert |
+
+---
+
+## License
+
+Copyright © 2026 **FiveNeurals**. All rights reserved.
+
+Agentic Island, including the Isla avatar, is proprietary software owned by FiveNeurals. See [LICENSE](LICENSE). Open-source components it uses (Electron, React and others) stay under their own licenses.

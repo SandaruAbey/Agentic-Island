@@ -1,85 +1,32 @@
 import { desktopCapturer, screen as eScreen } from 'electron'
-import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ActivityContext, AppPermission } from '@shared/types'
-import { killTree } from './agents'
+import type { WinRect } from './context'
+import { winHelper } from './winhelper'
 
 /**
  * Reads the window in front using Windows' built-in OCR (Windows.Media.Ocr) — fully on-device, zero tokens.
+ * Only the display holding that window is captured (never every open window), then cropped to the window.
  * Screenshots are written to one private file that is overwritten each time and deleted on kill switch/quit.
  */
-const OCR_SCRIPT = `
-$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-Add-Type -AssemblyName System.Runtime.WindowsRuntime
-$null = [Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime]
-$null = [Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
-$null = [Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics,ContentType=WindowsRuntime]
-$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
-function Await($op, $type) { $t = $asTask.MakeGenericMethod($type).Invoke($null, @($op)); $t.Wait(-1) | Out-Null; $t.Result }
-$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-[Console]::Out.WriteLine('READY'); [Console]::Out.Flush()
-while ($true) {
-  $path = [Console]::In.ReadLine()
-  if ($path -eq $null) { break }
-  try {
-    $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])
-    $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
-    $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
-    $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
-    $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
-    $text = ($result.Lines | ForEach-Object { $_.Text }) -join "\`n"
-    $stream.Dispose()
-    [Console]::Out.WriteLine('OK:' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($text)))
-  } catch { [Console]::Out.WriteLine('ERR:' + $_.Exception.Message) }
-  [Console]::Out.Flush()
-}
-`
 
 /** Never look at these — the capture is skipped entirely. */
 const PRIVATE = /(1password|bitwarden|keepass|lastpass|dashlane|nordpass|password|passwort|credential|bank|banking|paypal|wallet|incognito|inprivate|private browsing|authenticator|recovery code|seed phrase)/i
 
+/** Longest side of the capture; plenty for OCR and keeps the bitmap small. */
+const MAX_SIDE = 2200
+
 export class ScreenReader {
-  private ocr: ChildProcess | null = null
-  private ready: Promise<void> | null = null
-  private queue: ((line: string) => void)[] = []
   private file: string
 
-  constructor(private dir: string) {
+  constructor(
+    private dir: string,
+    /** Bounds of the window in front, in physical pixels (null = unknown → read the whole display). */
+    private getRect: () => WinRect | null = () => null
+  ) {
     mkdirSync(dir, { recursive: true })
     this.file = join(dir, 'screen.png')
-  }
-
-  private startOcr(): Promise<void> {
-    if (this.ready) return this.ready
-    const encoded = Buffer.from(OCR_SCRIPT, 'utf16le').toString('base64')
-    const p = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], {
-      windowsHide: true
-    })
-    this.ocr = p
-    let buf = ''
-    this.ready = new Promise((res, rej) => {
-      const t = setTimeout(() => rej(new Error('OCR engine did not start')), 20_000)
-      p.stdout.setEncoding('utf8')
-      p.stdout.on('data', (d: string) => {
-        buf += d
-        const lines = buf.split(/\r?\n/)
-        buf = lines.pop() ?? ''
-        for (const line of lines) {
-          if (line === 'READY') {
-            clearTimeout(t)
-            res()
-          } else if (line.startsWith('OK:') || line.startsWith('ERR:')) this.queue.shift()?.(line)
-        }
-      })
-      p.on('close', () => {
-        this.ocr = null
-        this.ready = null
-        for (const q of this.queue.splice(0)) q('ERR:OCR stopped')
-      })
-    })
-    return this.ready
   }
 
   /** Capture the foreground window and return its text, or a skip reason. */
@@ -91,55 +38,55 @@ export class ScreenReader {
       const perm = permissions.find(p => p.process === proc)
       if (perm && !perm.allowed) return { text: '', skipped: `Blocked by your app permissions — ${perm.name || activity.app} is not allowed` }
     }
-    const { width, height } = eScreen.getPrimaryDisplay().size
+    const phys = this.getRect()
+    let win: Electron.Rectangle | null = null
+    try {
+      win = phys ? eScreen.screenToDipRect(null, phys) : null
+    } catch {
+      win = null
+    }
+    const display = win ? eScreen.getDisplayMatching(win) : eScreen.getPrimaryDisplay()
+    const { width, height } = display.size
+    const scale = Math.min(1, MAX_SIDE / Math.max(width * display.scaleFactor, height * display.scaleFactor)) * display.scaleFactor
     let sources: Electron.DesktopCapturerSource[] = []
     try {
       sources = await Promise.race([
         desktopCapturer.getSources({
-          types: ['window', 'screen'],
-          thumbnailSize: { width: Math.min(width, 2200), height: Math.min(height, 1400) },
+          types: ['screen'],
+          thumbnailSize: { width: Math.round(width * scale), height: Math.round(height * scale) },
           fetchWindowIcons: false
         }),
         new Promise<Electron.DesktopCapturerSource[]>((_, rej) => setTimeout(() => rej(new Error('Capture timed out')), 4000))
       ])
     } catch {
-      try {
-        sources = await desktopCapturer.getSources({
-          types: ['screen'],
-          thumbnailSize: { width: Math.min(width, 2200), height: Math.min(height, 1400) },
-          fetchWindowIcons: false
-        })
-      } catch {
-        return { text: '', skipped: 'Window could not be captured' }
-      }
+      return { text: '', skipped: 'Window could not be captured' }
     }
-    const winSrc = sources.find(s => s.id.startsWith('window:') && (s.name === activity.title || (activity.title && s.name.startsWith(activity.title.slice(0, 30)))))
-    const screenSrc = sources.find(s => s.id.startsWith('screen:'))
-    const src = (winSrc && !winSrc.thumbnail.isEmpty()) ? winSrc : screenSrc
+    const src = sources.find(s => s.display_id === String(display.id)) ?? sources[0]
     if (!src || src.thumbnail.isEmpty()) return { text: '', skipped: 'Window could not be captured' }
-    writeFileSync(this.file, src.thumbnail.toPNG())
-    await this.startOcr()
-    const line = await new Promise<string>((res, rej) => {
-      const t = setTimeout(() => rej(new Error('OCR timed out')), 20_000)
-      this.queue.push(l => {
-        clearTimeout(t)
-        res(l)
-      })
-      this.ocr?.stdin?.write(this.file + '\n')
-    })
+    let img = src.thumbnail
+    // Crop to the window in front so other windows (and their text) are not read.
+    if (win) {
+      const sz = img.getSize()
+      const k = sz.width / display.bounds.width
+      const x = Math.max(0, Math.round((win.x - display.bounds.x) * k))
+      const y = Math.max(0, Math.round((win.y - display.bounds.y) * k))
+      const w = Math.min(sz.width - x, Math.round((win.x + win.width - display.bounds.x) * k) - x)
+      const h = Math.min(sz.height - y, Math.round((win.y + win.height - display.bounds.y) * k) - y)
+      if (w > 80 && h > 40) img = img.crop({ x, y, width: w, height: h })
+    }
+    writeFileSync(this.file, img.toPNG())
+    const line = await winHelper.ocr(this.file)
     if (line.startsWith('ERR:')) throw new Error(line.slice(4))
     return { text: Buffer.from(line.slice(3), 'base64').toString('utf8'), skipped: null }
   }
 
-  /** Delete the screenshot and stop the OCR process. */
+  /** Delete the screenshot and unload the OCR engine. */
   wipe(): void {
     try {
       rmSync(this.file, { force: true })
     } catch {
       /* ignore */
     }
-    if (this.ocr) killTree(this.ocr.pid)
-    this.ocr = null
-    this.ready = null
+    winHelper.disable('ocr')
   }
 }

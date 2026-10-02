@@ -5,6 +5,8 @@
  */
 import { forwardRef, useEffect, useImperativeHandle, useRef, type CSSProperties, type Ref } from 'react'
 
+const FRAME_MS = 1000 / 30 - 2
+
 export interface EyeShape {
   x: number
   y: number
@@ -217,6 +219,11 @@ export const Avatar = forwardRef(function Avatar(props: AvatarProps, ref: Ref<Av
     let last = performance.now()
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     const frame = (now: number) => {
+      // ~30 fps is plenty for a 30–50 px blob and halves (or more, on 120/144 Hz screens) the render work.
+      if (now - last < FRAME_MS) {
+        raf = requestAnimationFrame(frame)
+        return
+      }
       // rAF timestamps can be slightly older than performance.now() on the first frame — never step backwards.
       const dt = Math.min(0.05, Math.max(0, (now - last) / 1000))
       last = now

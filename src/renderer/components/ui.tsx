@@ -38,9 +38,11 @@ const PATHS: Record<string, string> = {
   chat: 'M4 3h16a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2z',
   eye: 'M12 5c5 0 9 4.5 10 7-1 2.5-5 7-10 7S3 14.5 2 12c1-2.5 5-7 10-7zm0 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm0 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4z',
   clock: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16zm-1 2h2v6.4l4.2 2.5-1 1.7L11 13V6z',
+  file: 'M6 2h8l6 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V9h5.5z',
+  buds: 'M7 2.5a4.5 4.5 0 0 1 4.5 4.5v.2a4.5 4.5 0 0 1-1 2.6V20a1.75 1.75 0 0 1-3.5 0v-8.6A4.5 4.5 0 0 1 2.5 7 4.5 4.5 0 0 1 7 2.5zm10 0A4.5 4.5 0 0 1 21.5 7 4.5 4.5 0 0 1 17 11.4V20a1.75 1.75 0 0 1-3.5 0V9.8a4.5 4.5 0 0 1-1-2.6V7A4.5 4.5 0 0 1 17 2.5zM7 5a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm10 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z',
   search: 'M10 3a7 7 0 0 1 5.6 11.2l5.1 5.1-1.4 1.4-5.1-5.1A7 7 0 1 1 10 3zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10z'
 }
-const EVENODD = new Set(['mail', 'eye', 'search', 'clock'])
+const EVENODD = new Set(['mail', 'eye', 'search', 'clock', 'buds'])
 
 export function Icon({ name, size = 16, className }: { name: string; size?: number; className?: string }) {
   return (
@@ -105,6 +107,39 @@ export function timeUntil(ts: number): string {
 export const shortPath = (p: string) => {
   const parts = p.split(/[\\/]/).filter(Boolean)
   return parts.length > 2 ? `…\\${parts.slice(-2).join('\\')}` : p
+}
+
+/** Button text for a meeting/reminder link: "Join Meet", "Join Zoom", "Join Teams" or "Open link". */
+export function joinLabel(url: string): string {
+  if (/meet\.google\.com/i.test(url)) return 'Join Meet'
+  if (/zoom\.(us|com)/i.test(url)) return 'Join Zoom'
+  if (/teams\.(microsoft|live)\.com/i.test(url)) return 'Join Teams'
+  if (/webex\.com/i.test(url)) return 'Join Webex'
+  return 'Open link'
+}
+
+/** A short, soft two-note chime (no sound files) when a reminder goes off. */
+export function chime(): void {
+  try {
+    const ctx = new AudioContext()
+    const notes = [880, 1318.5]
+    notes.forEach((f, i) => {
+      const o = ctx.createOscillator()
+      const g = ctx.createGain()
+      o.type = 'sine'
+      o.frequency.value = f
+      const t = ctx.currentTime + i * 0.18
+      g.gain.setValueAtTime(0, t)
+      g.gain.linearRampToValueAtTime(0.18, t + 0.02)
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.6)
+      o.connect(g).connect(ctx.destination)
+      o.start(t)
+      o.stop(t + 0.65)
+    })
+    window.setTimeout(() => void ctx.close(), 1200)
+  } catch {
+    /* no audio device */
+  }
 }
 
 export const cleanErr = (e: unknown) => String((e as Error)?.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')

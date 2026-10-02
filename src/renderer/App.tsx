@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DockState, IslandEvent, IslandSnapshot, MediaState, PanelId } from '@shared/types'
 import { IslaAvatar, type IslaAnimation } from './avatar'
-import { Icon, cleanErr } from './components/ui'
-import { UsageRings } from './components/Rings'
+import { Icon, chime, cleanErr, joinLabel } from './components/ui'
+import { BudsRing, UsageRings } from './components/Rings'
 import { MediaPill, isPlaying } from './components/Media'
 import { SUGGEST_FACE, actOn, actionLabel } from './suggest'
 import { HomePanel } from './panels/Home'
@@ -40,7 +40,16 @@ const REACTION: Record<Notice['kind'], IslaAnimation> = {
   'run-error': 'error',
   security: 'alert',
   info: 'surprised',
-  reminder: 'excited'
+  reminder: 'excited',
+  action: 'alert',
+  device: 'happy'
+}
+
+/** Live updates leave out outputs that didn't change — keep the copy we already have (including streamed text). */
+function mergeSnapshot(prev: IslandSnapshot | null, next: IslandSnapshot): IslandSnapshot {
+  if (!next.runs.some(r => r.outputOmitted)) return next
+  const old = new Map((prev?.runs ?? []).map(r => [r.id, r.output]))
+  return { ...next, runs: next.runs.map(r => (r.outputOmitted ? { ...r, output: old.get(r.id) ?? '', outputOmitted: false } : r)) }
 }
 
 export function App() {
@@ -55,6 +64,7 @@ export function App() {
   const [mailUid, setMailUid] = useState<string | null>(null)
   const [focusRun, setFocusRun] = useState<string | null>(null)
   const [peekMsg, setPeekMsg] = useState<string | null>(null)
+  const [askText, setAskText] = useState('')
   const sugIdx = useRef(0)
   const [lastActivity, setLastActivity] = useState(Date.now())
   const [now, setNow] = useState(Date.now())
@@ -91,7 +101,7 @@ export function App() {
       setMedia(s.media)
     })
     const off = window.island.onEvent(e => {
-      if (e.type === 'snapshot') setSnap(e.snapshot)
+      if (e.type === 'snapshot') setSnap(prev => mergeSnapshot(prev, e.snapshot))
       else if (e.type === 'media') setMedia(e.media)
       else if (e.type === 'dock') {
         // Landed on an edge (or hidden/shown): new layout + a little squash-and-stretch.
@@ -116,6 +126,7 @@ export function App() {
           s ? { ...s, runs: s.runs.map(r => (r.id === e.id ? { ...r, output: r.output + e.chunk } : r)) } : s
         )
       } else if (e.type === 'notify') {
+        if (e.kind === 'reminder') chime()
         setNotice(e)
         react(e.kind === 'suggest' && e.icon ? SUGGEST_FACE[e.icon] : REACTION[e.kind])
         setLastActivity(Date.now())
@@ -124,7 +135,7 @@ export function App() {
         noticeTimer.current = window.setTimeout(() => {
           setNotice(null)
           setMode(m => (m === 'peek' ? 'compact' : m))
-        }, e.kind === 'otp' ? 20_000 : e.kind === 'suggest' || e.kind === 'commit' ? 9000 : e.kind === 'mail' ? 12_000 : 6000)
+        }, e.kind === 'reminder' ? 45_000 : e.kind === 'device' ? 4000 : e.kind === 'action' ? 120_000 : e.kind === 'otp' ? 20_000 : e.kind === 'suggest' || e.kind === 'commit' ? 9000 : e.kind === 'mail' ? 12_000 : 6000)
       }
     })
     const t = window.setInterval(() => setNow(Date.now()), 15_000)
@@ -137,6 +148,15 @@ export function App() {
   useEffect(() => {
     if (mode === 'peek' && !notice) setMode('compact')
   }, [mode, notice])
+
+  // A suggestion belongs to the window it was made for: when it disappears (you switched window/tab), so does its peek.
+  useEffect(() => {
+    if (notice?.kind !== 'suggest' || !notice.suggestionId || !snap) return
+    if (!snap.suggestions.some(x => x.id === notice.suggestionId)) {
+      setNotice(null)
+      setAskText('')
+    }
+  }, [snap, notice])
 
   useEffect(() => {
     if (mode === 'compact' && fromNotice) setFromNotice(false)
@@ -156,17 +176,38 @@ export function App() {
       }, 450)
     }
   }
+  const collapseNow = () => {
+    // Let go of the text box too, so "typing" can't keep the island open (the draft is kept).
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+    setTyping(false)
+    setMode(m => (m === 'expanded' || m === 'peek' ? (notice ? 'peek' : 'compact') : m))
+  }
   const leave = () => {
     window.clearTimeout(hoverTimer.current)
     if (draggingRef.current) return
     setInteractive(false)
-    if (pinned || typing) return
-    if (dock?.hidden) return
+    if (pinned || dock?.hidden) return
+    // While typing, wait a little longer — a quick mouse slip outside shouldn't close it.
     collapseTimer.current = window.setTimeout(() => {
       if (dock?.hidden) return
-      setMode(notice ? 'peek' : 'compact')
-    }, 700)
+      collapseNow()
+    }, typing ? 2500 : 700)
   }
+
+  // Clicking into another app also folds the island away (unless it's pinned or the mouse is still on it).
+  const blurState = useRef({ pinned, mode })
+  blurState.current = { pinned, mode }
+  useEffect(() => {
+    const onBlur = () => {
+      const st = blurState.current
+      if (st.pinned || st.mode !== 'expanded' || interactive.current) return
+      window.clearTimeout(collapseTimer.current)
+      collapseTimer.current = window.setTimeout(collapseNow, 300)
+    }
+    window.addEventListener('blur', onBlur)
+    return () => window.removeEventListener('blur', onBlur)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // ---- drag to any edge
   const onPointerDown = (e: React.PointerEvent) => {
@@ -215,11 +256,12 @@ export function App() {
 
   const baseAnimation: IslaAnimation = useMemo(() => {
     if (locked) return 'sleeping'
+    if (typing) return 'listening'
+    // Music on → Isla dances (sways to the beat, happy squints, little jumps) — even while a task runs or waits;
+    // the orange/green dot on the pill still shows that.
+    if (isPlaying(media)) return 'dancing'
     if (pending.length) return 'suspicious'
     if (running.length) return running.some(r => r.title.startsWith('Predict')) ? 'thinking' : 'working'
-    if (typing) return 'listening'
-    // Music on → Isla dances (sways to the beat, happy squints, little jumps).
-    if (isPlaying(media)) return 'dancing'
     if (mode === 'expanded' && panel === 'git') return 'searching'
     if (mode === 'expanded') return 'idle'
     if (snap?.git?.conflicted) return 'confused'
@@ -308,8 +350,12 @@ export function App() {
   // Usage rings stay visible next to the music.
   const rings = idle ? snap.limits : []
   const sugCount = locked ? 0 : snap.suggestions.length
-  const pillWidth = (mediaMode ? 470 : 250) + rings.length * RING + 26 + (sugCount ? 46 : 0)
-  const compactStyle = vertical ? { height: (mediaMode ? 232 : 84) + rings.length * (RING + 4) + 30 + (sugCount ? 40 : 0) } : { width: pillWidth }
+  // Connected earbuds/headphones: icon + battery on the pill.
+  const buds = snap.audioDevices?.[0] ?? null
+  const pillWidth = (mediaMode ? 470 : 250) + rings.length * RING + 26 + (sugCount ? 46 : 0) + (buds ? RING : 0)
+  const compactStyle = vertical
+    ? { height: (mediaMode ? 232 : 84) + rings.length * (RING + 4) + 30 + (sugCount ? 40 : 0) + (buds ? RING + 4 : 0) }
+    : { width: pillWidth }
   const showTab = ((dock.hidden && !dragging && edgePhase !== 'top') || edgePhase === 'retracting-dock') && edgePhase !== 'retracting-top'
   const hideArrow = { top: 'up', bottom: 'down', left: 'left', right: 'right' }[edge]
   const showArrow = { top: 'down', bottom: 'up', left: 'right', right: 'left' }[edge]
@@ -337,14 +383,15 @@ export function App() {
     setMode('expanded')
   }
   /** Run any suggestion from the peek: answers open on Home, quick results show right in the peek. */
-  const runSuggestion = async (id: string) => {
+  const runSuggestion = async (id: string, request?: string) => {
     const sug = snap.suggestions.find(x => x.id === id)
     if (!sug) {
       setPeekMsg('That suggestion is no longer available.')
       return
     }
     setPeekMsg('Working on it…')
-    const out = await actOn(sug, snap)
+    setAskText('')
+    const out = await actOn(sug, snap, request)
     setPeekMsg(null)
     if (out.kind === 'run' || (out.kind === 'ask' && out.result.type === 'run')) {
       setFocusRun(out.kind === 'run' ? out.run.id : (out.result as { run: { id: string } }).run.id)
@@ -446,6 +493,12 @@ export function App() {
             <span className={`dot ${locked ? 'red' : running.length ? 'green pulse' : pending.length ? 'orange pulse' : snap.otps.length ? 'blue' : ''}`} />
             </>
             )}
+            {buds && (
+              // Battery ring like the AI-usage rings; click for the details on Home.
+              <span className="buds-pill" onClick={() => setPanel('home')}>
+                <BudsRing d={buds} size={RING - 6} />
+              </span>
+            )}
             {/* Tuck away straight from the pill — no need to open the island first. */}
             {sugCount > 0 && (
               <button className="pill-sugg" title={`${sugCount} suggestion${sugCount > 1 ? 's' : ''} — click to see`} onClick={reopenSuggestion}>
@@ -483,11 +536,41 @@ export function App() {
               <div className="peek-actions">
                 {(() => {
                   const sug = snap.suggestions.find(x => x.id === notice.suggestionId)
-                  return sug ? (
+                  if (!sug) return null
+                  // "Need help with this page?" — you say what you want; Isla doesn't guess.
+                  if (sug.action.type === 'do' && sug.action.askUser) {
+                    const go = () => askText.trim() && void runSuggestion(sug.id, askText.trim())
+                    return (
+                      <form
+                        className="peek-ask"
+                        onSubmit={e => {
+                          e.preventDefault()
+                          go()
+                        }}
+                      >
+                        <input
+                          autoFocus
+                          value={askText}
+                          disabled={!!peekMsg}
+                          placeholder={sug.action.askUser}
+                          onFocus={() => {
+                            setTyping(true)
+                            window.clearTimeout(noticeTimer.current)
+                          }}
+                          onBlur={() => setTyping(false)}
+                          onChange={e => setAskText(e.target.value)}
+                        />
+                        <button className="btn primary round" type="submit" disabled={!!peekMsg || !askText.trim()}>
+                          <Icon name="send" size={13} />
+                        </button>
+                      </form>
+                    )
+                  }
+                  return (
                     <button className="btn primary round" disabled={!!peekMsg} onClick={() => void runSuggestion(sug.id)}>
                       {actionLabel(sug)}
                     </button>
-                  ) : null
+                  )
                 })()}
                 <button className="icon-btn" title="Not now" onClick={() => void window.island.dismissSuggestion(notice.suggestionId!).then(() => { setNotice(null); setMode('compact') })}>
                   <Icon name="close" size={13} />
@@ -529,6 +612,63 @@ export function App() {
               }}>
                 <Icon name="copy" /> Copy
               </button>
+            ) : notice.kind === 'action' && notice.actionId ? (
+              <div className="peek-actions">
+                {snap.pendingActions.some(a => a.id === notice.actionId) ? (
+                  <>
+                    <button className="btn green round" onClick={() => {
+                      window.clearTimeout(noticeTimer.current)
+                      void window.island.decideAction(notice.actionId!, true)
+                      setNotice(null)
+                      setMode(m => (m === 'peek' ? 'compact' : m))
+                    }}>
+                      Allow
+                    </button>
+                    <button className="btn red round" onClick={() => {
+                      window.clearTimeout(noticeTimer.current)
+                      void window.island.decideAction(notice.actionId!, false)
+                      setNotice(null)
+                      setMode(m => (m === 'peek' ? 'compact' : m))
+                    }}>
+                      Deny
+                    </button>
+                  </>
+                ) : (
+                  <button className="icon-btn" title="Dismiss" onClick={() => setNotice(null)}>
+                    <Icon name="close" size={13} />
+                  </button>
+                )}
+              </div>
+            ) : notice.kind === 'device' ? (
+              <span className="peek-device">
+                <Icon name="buds" size={20} />
+              </span>
+            ) : notice.kind === 'reminder' && notice.reminderId && snap.alerts.some(a => a.id === notice.reminderId) ? (
+              (() => {
+                const al = snap.alerts.find(a => a.id === notice.reminderId)!
+                const ack = (action: 'done' | 'snooze' | 'open') => {
+                  window.clearTimeout(noticeTimer.current)
+                  void window.island.ackReminder(al.id, action)
+                  setNotice(null)
+                  setFromNotice(false)
+                  setMode(m => (m === 'peek' ? 'compact' : m))
+                }
+                return (
+                  <div className="peek-actions">
+                    {al.url && (
+                      <button className="btn green round" onClick={() => ack('open')}>
+                        {joinLabel(al.url)}
+                      </button>
+                    )}
+                    <button className="btn ghost round" onClick={() => ack('snooze')} title="Remind me again in 5 minutes">
+                      Snooze 5m
+                    </button>
+                    <button className="icon-btn" title={al.kind === 'alarm' ? 'Stop alarm' : 'Done'} onClick={() => ack('done')}>
+                      <Icon name="check" size={14} />
+                    </button>
+                  </div>
+                )
+              })()
             ) : notice.kind === 'reminder' || notice.url ? (
               <div className="peek-actions">
                 {notice.url && (
@@ -570,8 +710,17 @@ export function App() {
               <IslaAvatar animation={animation} size={46} className={facingLeft ? 'face-left' : ''} />
               <div className="ex-title" title="Drag to move Isla to any screen edge">
                 <strong>Isla</strong>
-                <span>{status}</span>
+                <span>{locked || running.length || pending.length || snap.otps.length ? status : 'Product by FiveNeurals'}</span>
               </div>
+              {buds && (
+                <div className="head-buds" title={`${buds.name}${buds.battery !== null ? ` · ${buds.battery}% battery` : ' · connected'}`}>
+                  <BudsRing d={buds} size={30} />
+                  <span>
+                    <strong>{buds.name}</strong>
+                    <em>{buds.battery !== null ? `${buds.battery}% battery` : 'Connected'}</em>
+                  </span>
+                </div>
+              )}
               <nav className="tabs" aria-label="Panels">
                 {TABS.map(t => (
                   <button

@@ -1,5 +1,6 @@
 appId: com.agenticisland.app
 productName: Agentic Island
+copyright: Copyright © 2026 FiveNeurals. All rights reserved.
 directories:
   output: release
   buildResources: build
@@ -27,6 +28,8 @@ nsis:
 extraResources:
   - from: build/icon.png
     to: icon.png
+  - from: LICENSE
+    to: LICENSE.txt
   # Optional: your Google "Desktop app" OAuth client for "Sign in with Google" (see README).
   - from: build
     to: .

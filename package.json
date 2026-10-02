@@ -3,7 +3,9 @@
     "productName":  "Agentic Island",
     "version":  "0.1.0",
     "description":  "A macOS-style Dynamic Island for Windows that connects to your local AI coding agents.",
-    "author":  "Agentic Island",
+    "author":  "FiveNeurals",
+    "license":  "SEE LICENSE IN LICENSE",
+    "copyright":  "Copyright © 2026 FiveNeurals. All rights reserved.",
     "main":  "./out/main/index.js",
     "scripts":  {
                     "dev":  "electron-vite dev",

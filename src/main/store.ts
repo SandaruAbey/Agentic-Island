@@ -11,6 +11,7 @@ const auditFile = () => join(dir(), 'audit.log')
 export const defaultSettings: Settings = {
   google: { clientId: '', clientSecret: '' },
   mediaControls: true,
+  earbuds: true,
   dock: { edge: 'top', pos: 0.5, hidden: false },
   usageLimits: { claudeDaily: 0, claudeWeekly: 0, codexDaily: 0, codexWeekly: 0, antigravityDaily: 0, antigravityWeekly: 0, weekStartDay: 1, readPlanUsage: true },
   activeProvider: 'claude',
@@ -38,6 +39,7 @@ export const defaultSettings: Settings = {
   proactive: { enabled: true, llmPredictions: false },
   launchAtLogin: false,
   appPermissions: [],
+  computer: { enabled: true, realInput: true },
   assistant: {
     provider: 'auto',
     autoApproveGeneral: false,
@@ -46,9 +48,10 @@ export const defaultSettings: Settings = {
     screenWatch: true,
     aiInsights: true,
     aiChecksPerHour: 10,
-    backgroundModel: 'gemini-3.8-flash',
+    backgroundModel: '',
     autoReviewCommits: true,
-    webApprovalRequired: true
+    webApprovalRequired: true,
+    linkPreviews: true
   }
 }
 
@@ -83,6 +86,8 @@ export function loadSettings(): Settings {
   settings.mail.hasPassword = !!readSecret('mailPassword')
   // assistant.provider is deprecated (General runs now always follow activeProvider) — never let a stale pinned value resurface.
   settings.assistant.provider = 'auto'
+  // The old built-in default — background checks now use the model you picked for your agent.
+  if (settings.assistant.backgroundModel === 'gemini-3.8-flash') settings.assistant.backgroundModel = ''
   return settings
 }
 

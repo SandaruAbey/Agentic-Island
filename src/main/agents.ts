@@ -1,5 +1,5 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process'
-import { existsSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
@@ -23,9 +23,9 @@ const PROVIDERS: Record<ProviderId, { label: string; bin: string[]; headless: bo
       'gemini-3.7-flash',
       'gemini-3.6-flash',
       'gemini-3.1-pro',
-      'claude-sonnet-4.6',
-      'claude-opus-4.6',
-      'gpt-oss-120b'
+      'claude-sonnet-4-6',
+      'claude-opus-4-6-thinking',
+      'gpt-oss-120b-medium'
     ]
   },
   custom: { label: 'Custom CLI', bin: [], headless: true, models: [] }
@@ -49,18 +49,24 @@ export function sanitizeAntigravityModel(model?: string): { modelName: string; e
     return { modelName: 'gemini-3.1-pro', effort: 'high' }
   }
   if (m.includes('claude-sonnet-4') || m.includes('sonnet-4.6')) {
-    return { modelName: 'claude-sonnet-4.6' }
+    return { modelName: 'claude-sonnet-4-6' }
   }
   if (m.includes('claude-opus-4') || m.includes('opus-4.6')) {
-    return { modelName: 'claude-opus-4.6' }
+    return { modelName: 'claude-opus-4-6-thinking' }
   }
   if (m.includes('gpt-oss')) {
-    return { modelName: 'gpt-oss-120b' }
+    return { modelName: 'gpt-oss-120b-medium' }
   }
   return { modelName: model!.trim() }
 }
 
 const MAX_RUN_MS = 15 * 60_000
+/** Shown on a PC task's approval card when Antigravity still needs the one-time Connect. */
+export const AGY_NOT_CONNECTED = 'Antigravity needs Isla’s tools connected once before it can do PC tasks. Click Connect.'
+/** Unanswered approval cards expire, so an old one can't sit there (and keep Isla "suspicious") forever. */
+const APPROVAL_TTL_MS = 30 * 60_000
+/** The agent wanted a tool (shell, files…) that a background run can't ask permission for. */
+export const HEADLESS_DENIED = /(headless mode cannot prompt|was auto-denied|permission[^.\n]{0,40}denied|requires? (user )?approval)/i
 const MAX_OUTPUT = 400_000
 /** Characters that could break out of cmd.exe quoting when a .cmd shim must be used. */
 const UNSAFE_CMD_CHARS = /["%^&|<>!\r\n`]/
@@ -139,8 +145,8 @@ function findInExtensions(prefix: string, rel: string[]): string | null {
 }
 
 /** Spawn without ever handing user text to a shell. .cmd shims need cmd.exe, so their args are validated first. */
-export function spawnSafe(cmd: string, args: string[], cwd: string): ChildProcess {
-  const env = { ...process.env, PATH: searchPath(), NO_COLOR: '1', FORCE_COLOR: '0' }
+export function spawnSafe(cmd: string, args: string[], cwd: string, extraEnv: Record<string, string> = {}): ChildProcess {
+  const env = { ...process.env, PATH: searchPath(), NO_COLOR: '1', FORCE_COLOR: '0', ...extraEnv }
   if (/\.(cmd|bat)$/i.test(cmd)) {
     for (const a of [cmd, ...args]) {
       if (UNSAFE_CMD_CHARS.test(a)) throw new Error(`Refusing unsafe argument: ${a}`)
@@ -177,6 +183,13 @@ export class AgentManager {
   assistantDir = ''
   /** Whether the installed Claude Code supports --restricted (ignores user/project settings, confines tools). */
   private claudeRestricted = false
+  /** Computer control: how a computer run reaches Isla's tool server, and the cleanup when it ends. */
+  computerHooks: {
+    launch: (run: AgentRun) => { command: string; args: string[]; env: Record<string, string> }
+    end: (runId: string) => void
+    /** Antigravity has no per-run tool config: true once the user connected Isla's tools to it (Settings). */
+    antigravityReady: () => boolean
+  } | null = null
 
   constructor(
     private getSettings: () => Settings,
@@ -255,6 +268,42 @@ export class AgentManager {
     return this.procs.size
   }
 
+  /**
+   * Agent for computer-control tasks: the active one when it can load Isla's tools for a single run
+   * (Claude Code, Codex CLI, Gemini CLI), otherwise the first of those that is installed.
+   */
+  computerProvider(): ProviderId {
+    const s = this.getSettings()
+    const ok = (id: ProviderId) => !!this.providers.find(x => x.id === id)?.installed && s.providers[id].enabled
+    // Always the agent (and model) you chose in Settings; only fall back when it can't run tasks in the background.
+    const capable: ProviderId[] = ['claude', 'codex', 'gemini', 'antigravity']
+    if (capable.includes(s.activeProvider) && ok(s.activeProvider)) return s.activeProvider
+    const p = capable.find(ok)
+    if (!p) throw new Error('Computer control needs Claude Code, Codex CLI, Gemini CLI or Antigravity CLI installed.')
+    return p
+  }
+
+  /**
+   * The model a background job uses: the requested one only if it belongs to this agent — "haiku" set while
+   * using Claude must not turn into some other model on Antigravity — otherwise the model you picked for the agent.
+   */
+  modelFor(id: ProviderId, requested: string): string {
+    const want = requested.trim()
+    const own = this.getSettings().providers[id].model
+    if (!want) return own
+    const mine = PROVIDERS[id].models
+    const foreign = (Object.keys(PROVIDERS) as ProviderId[]).some(p => p !== id && PROVIDERS[p].models.includes(want))
+    return foreign && !mine.includes(want) ? own : want
+  }
+
+  /** Add a progress line to a run's output (computer-control steps). */
+  note(id: string, text: string): void {
+    const run = this.runs.find(r => r.id === id)
+    if (!run || run.status !== 'running') return
+    if (run.output.length < MAX_OUTPUT) run.output += text
+    this.onOutput(run.id, text)
+  }
+
   /** Agent that answers General questions: the user's chosen default agent (Settings → Agents & models), else the first installed headless one. */
   assistantProvider(): ProviderId | null {
     const s = this.getSettings()
@@ -274,6 +323,7 @@ export class AgentManager {
     const id = this.assistantProvider()
     const status = this.providers.find(p => p.id === id)
     if (!id || !status?.path) return Promise.reject(new Error('No background agent available.'))
+    model = this.modelFor(id, model)
     if (!SAFE_MODEL.test(model)) return Promise.reject(new Error('Invalid model id.'))
     let args: string[]
     let input = prompt
@@ -323,8 +373,9 @@ export class AgentManager {
         clearTimeout(timer)
         for (const [k, v] of this.procs) if (v === child) this.procs.delete(k)
         if (code !== 0 && code !== null) {
-          return rej(new Error(errOut.trim() || out.trim() || `Agent exited with code ${code}`))
+          return rej(new Error(friendlyError(id, model, errOut.trim() || out.trim() || `Agent exited with code ${code}`)))
         }
+        if (id !== 'claude' && id !== 'codex' && !out.trim() && errOut.trim()) return rej(new Error(friendlyError(id, model, errOut.trim())))
         if (id === 'claude') {
           try {
             const j = JSON.parse(out.trim().split(/\r?\n/).pop() ?? '{}')
@@ -365,7 +416,7 @@ export class AgentManager {
     if (locked) throw new Error('Kill switch is engaged. Resume the island first.')
     const provider = this.assistantProvider()
     if (!provider) throw new Error('No background-capable agent found. Install or sign in to Claude Code, Codex CLI or Gemini CLI.')
-    let effectiveModel = model || this.getSettings().providers[provider].model
+    let effectiveModel = this.modelFor(provider, model)
     if (provider === 'antigravity') {
       effectiveModel = sanitizeAntigravityModel(effectiveModel).modelName
     }
@@ -382,18 +433,25 @@ export class AgentManager {
       startedAt: Date.now(),
       context: 'general',
       allowWeb: false,
-      hasMail: false
+      hasMail: false,
+      question: title.slice(0, 4000)
     }
+    run.threadId = run.id
     this.runs.unshift(run)
     this.runs = this.runs.slice(0, 30)
     this.log('run.lite', run.title)
     this.onChange()
     this.quickAsk(system, prompt, effectiveModel)
       .then(r => {
-        run.output = r.text.trim() || '(no answer)'
         run.usage = { input: r.tokens, output: 0, cacheRead: 0, cacheWrite: 0 }
         run.costUsd = r.cost
-        if (run.status === 'running') run.status = 'done'
+        if (r.text.trim()) {
+          run.output = r.text.trim()
+          if (run.status === 'running') run.status = 'done'
+        } else {
+          run.output = `⚠ ${PROVIDERS[provider].label} returned no answer (model ${effectiveModel || 'default'}). Try again, or pick another model in Settings → Agents & models.`
+          if (run.status === 'running') run.status = 'error'
+        }
       })
       .catch(e => {
         run.output = String((e as Error).message)
@@ -412,13 +470,16 @@ export class AgentManager {
    * Queue a task for approval. `opts` is only ever set by the main process (never from the renderer):
    * the fully composed prompt (e.g. with redacted mail attached) and whether web access is allowed.
    */
-  request(req: RunRequest, locked: boolean, opts: { prompt?: string; allowWeb?: boolean; hasMail?: boolean } = {}): AgentRun {
+  request(req: RunRequest, locked: boolean, opts: { prompt?: string; allowWeb?: boolean; hasMail?: boolean; computer?: boolean } = {}): AgentRun {
     const s = this.getSettings()
     if (locked) throw new Error('Kill switch is engaged. Resume the island first.')
-    const context = req.context === 'general' ? 'general' : 'project'
+    const context = req.context === 'general' || opts.computer ? 'general' : 'project'
     let provider: ProviderId
     let workspace: string
-    if (context === 'general') {
+    if (opts.computer) {
+      provider = this.computerProvider()
+      workspace = this.assistantDir
+    } else if (context === 'general') {
       const p = req.provider ?? this.assistantProvider()
       if (!p) throw new Error('No background-capable agent found. Install Claude Code, Codex CLI or Gemini CLI (Antigravity only works inside its IDE).')
       provider = p
@@ -449,11 +510,21 @@ export class AgentManager {
       startedAt: Date.now(),
       context,
       allowWeb: !!opts.allowWeb && !opts.hasMail,
-      hasMail: !!opts.hasMail
+      hasMail: !!opts.hasMail,
+      computer: !!opts.computer,
+      question: String(req.title ?? req.prompt ?? '').slice(0, 4000)
     }
+    run.threadId = typeof req.threadId === 'string' && /^[\w-]{8,64}$/.test(req.threadId) ? req.threadId : run.id
     this.runs.unshift(run)
     this.runs = this.runs.slice(0, 30)
     this.log('run.requested', `${run.title} [${provider}/${run.model || 'default'}/${run.mode}]`)
+    setTimeout(() => {
+      if (run.status !== 'pending-approval') return
+      run.status = 'rejected'
+      run.endedAt = Date.now()
+      this.log('run.expired', `${run.title} (not approved within 30 min)`)
+      this.onChange()
+    }, APPROVAL_TTL_MS).unref()
     this.onChange()
     return run
   }
@@ -477,16 +548,49 @@ export class AgentManager {
     if (!status?.path) throw new Error(`${PROVIDERS[run.provider].label} was not found on this PC.`)
     if (!status.headless) throw new Error('This provider cannot run headless. Use "Open in Antigravity".')
     if (!SAFE_MODEL.test(run.model)) throw new Error('Model id contains invalid characters.')
+    if (run.computer && run.provider === 'antigravity' && !this.computerHooks?.antigravityReady()) {
+      throw new Error(AGY_NOT_CONNECTED)
+    }
 
-    const args = this.buildArgs(run.provider, run.model, run.mode, run.allowWeb, run.prompt)
-    this.log('run.approved', `${run.title} → ${status.path} ${args.join(' ')} (cwd ${run.workspace})`)
+    let args: string[]
+    let env: Record<string, string> = {}
+    const cleanup: (() => void)[] = []
+    if (run.computer) {
+      if (!this.computerHooks) throw new Error('Computer control is not ready yet.')
+      const hooks = this.computerHooks
+      let c: { args: string[]; env: Record<string, string>; files: string[] }
+      try {
+        c = this.computerArgs(run, hooks.launch(run))
+      } catch (e) {
+        hooks.end(run.id)
+        throw e
+      }
+      args = c.args
+      env = c.env
+      cleanup.push(() => {
+        for (const f of c.files) rmSync(f, { force: true })
+        this.computerHooks?.end(run.id)
+      })
+    } else args = this.buildArgs(run.provider, run.model, run.mode, run.allowWeb, run.prompt)
+    const finish = () => {
+      for (const f of cleanup.splice(0)) {
+        try {
+          f()
+        } catch {
+          /* best effort */
+        }
+      }
+    }
+    const shown = args.map(a => (a === run.prompt ? `<prompt, ${a.length} chars>` : a.length > 160 ? `${a.slice(0, 60)}…` : a))
+    this.log('run.approved', `${run.title} → ${status.path} ${shown.join(' ').replace(/ISLA_TOKEN='[^']*'/, "ISLA_TOKEN='…'")} (cwd ${run.workspace})`)
     run.status = 'running'
     run.startedAt = Date.now()
 
     let child: ChildProcess
     try {
-      child = spawnSafe(status.path, args, run.workspace)
+      child = spawnSafe(status.path, args, run.workspace, env)
     } catch (e) {
+      finish()
       run.status = 'error'
       run.output = String((e as Error).message)
       this.onChange()
@@ -517,11 +621,16 @@ export class AgentManager {
     child.on('error', err => append(`\n⚠ ${err.message}\n`))
     child.on('close', code => {
       clearTimeout(timer)
+      finish()
       if (lineBuf) append(this.parseLine(run, lineBuf))
       this.procs.delete(run.id)
       if (run.status === 'running') run.status = code === 0 ? 'done' : 'error'
+      if (run.status === 'done' && HEADLESS_DENIED.test(run.output)) run.status = 'error'
+      if (run.computer && HEADLESS_DENIED.test(run.output)) {
+        append('\n💡 The agent tried a tool that Isla does not allow in PC tasks (like a shell command) instead of Isla’s own tools. Ask again in simpler steps, or pick a stronger model in Settings → Agents & models.\n')
+      }
       if (run.status === 'error' && !run.output.trim()) run.output = `Exited with code ${code}.`
-      const hint = signInHint(run.provider, run.output)
+      const hint = signInHint(run.provider, run.output) ?? quotaHint(run.provider, run.model, run.output)
       if (run.status === 'error' && hint) append(`\n💡 ${hint}\n`)
       run.endedAt = Date.now()
       this.log(`run.${run.status}`, `${run.title} (exit ${code})`)
@@ -529,6 +638,68 @@ export class AgentManager {
       this.onChange()
     })
     this.onChange()
+  }
+
+  /** CLI arguments for a computer-control run: no shell/file-edit/web tools — only Isla's tool server, for this run only. */
+  private computerArgs(
+    run: AgentRun,
+    mcp: { command: string; args: string[]; env: Record<string, string> }
+  ): { args: string[]; env: Record<string, string>; files: string[] } {
+    const model = run.model
+    const file = (name: string, body: unknown) => {
+      const p = join(this.assistantDir, `${name}-${run.id}.json`)
+      writeFileSync(p, JSON.stringify(body), 'utf8')
+      return p
+    }
+    switch (run.provider) {
+      case 'claude': {
+        const cfg = file('isla-mcp', { mcpServers: { isla: { type: 'stdio', ...mcp } } })
+        const a = ['-p', '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--mcp-config', cfg, '--setting-sources', 'local']
+        a.push('--disallowedTools', ['Bash', 'PowerShell', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task', 'Agent'].join(','))
+        a.push('--allowedTools', 'mcp__isla', '--permission-mode', 'default')
+        if (model) a.push('--model', model)
+        // Load Isla's ~20 tools up front instead of searching for them on every step.
+        return { args: a, env: { ENABLE_TOOL_SEARCH: 'false' }, files: [cfg] }
+      }
+      case 'codex': {
+        // TOML literal strings ('…') need no escaping, and keep the line free of double quotes for .cmd shims.
+        const lit = (v: string) => {
+          if (v.includes("'") || /[\r\n]/.test(v)) throw new Error('Unsupported path for Codex computer control.')
+          return `'${v}'`
+        }
+        const env = Object.entries(mcp.env).map(([k, v]) => `${k}=${lit(v)}`).join(',')
+        const a = ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only']
+        a.push('-c', `mcp_servers.isla.command=${lit(mcp.command)}`)
+        a.push('-c', `mcp_servers.isla.args=[${mcp.args.map(lit).join(',')}]`)
+        a.push('-c', `mcp_servers.isla.env={${env}}`)
+        a.push('-c', 'mcp_servers.isla.tool_timeout_sec=300')
+        if (model) a.push('-m', model)
+        a.push('-')
+        return { args: a, env: {}, files: [] }
+      }
+      case 'gemini': {
+        // A per-run system settings file: adds only Isla's server, trusted (no CLI prompt — Isla asks on the island).
+        const cfg = file('gemini-settings', { mcpServers: { isla: { ...mcp, trust: true, timeout: 300_000 } } })
+        const a = ['--approval-mode', 'default', '--allowed-mcp-server-names', 'isla']
+        if (model) a.push('-m', model)
+        return { args: a, env: { GEMINI_CLI_SYSTEM_SETTINGS_PATH: cfg }, files: [cfg] }
+      }
+      case 'antigravity': {
+        // Isla's server is registered with agy once (Settings → Connect); it only offers tools to an agy process that
+        // carries this run's token in its environment. Plan mode keeps agy's own edit/shell tools off.
+        const a: string[] = []
+        const agy = sanitizeAntigravityModel(model)
+        if (agy.modelName) {
+          a.push('--model', agy.modelName)
+          if (agy.effort) a.push('--effort', agy.effort)
+        }
+        a.push('--mode', 'plan', '--print', run.prompt)
+        const { ISLA_PORT, ISLA_TOKEN } = mcp.env
+        return { args: a, env: { ISLA_PORT, ISLA_TOKEN }, files: [] }
+      }
+      default:
+        throw new Error('This agent cannot load Isla’s computer tools.')
+    }
   }
 
   private buildArgs(provider: ProviderId, model: string, mode: AgentMode, allowWeb: boolean, prompt?: string): string[] {
@@ -608,7 +779,7 @@ export class AgentManager {
         return j.message.content
           .map((c: any) => {
             if (c.type === 'text') return c.text + '\n'
-            if (c.type === 'tool_use') return `▸ ${c.name} ${summarize(c.input)}\n`
+            if (c.type === 'tool_use') return /^(mcp__isla__|ToolSearch$)/.test(c.name) ? '' : `▸ ${c.name} ${summarize(c.input)}\n`
             return ''
           })
           .join('')
@@ -678,6 +849,27 @@ export class AgentManager {
       return { ok: false, message: (e as Error).message }
     }
   }
+}
+
+const QUOTA = /(quota|RESOURCE_EXHAUSTED|rate.?limit|\b429\b|no capacity|UNAVAILABLE \(code 503\)|overloaded)/i
+
+function quotaHint(provider: ProviderId, model: string, output: string): string | null {
+  if (!QUOTA.test(output)) return null
+  return `${PROVIDERS[provider].label} has no capacity left for ${model || 'this model'} right now (quota or rate limit). Pick another model in Settings → Agents & models, or try again later.`
+}
+
+/** One readable line for a background-call failure (agy prints a JSON blob after "AGY_ERROR:"). */
+function friendlyError(provider: ProviderId, model: string, raw: string): string {
+  const agy = raw.match(/AGY_ERROR:\s*(\{.*\})/)
+  let msg = raw
+  if (agy) {
+    try {
+      msg = JSON.parse(agy[1]).short_error ?? raw
+    } catch {
+      /* keep raw */
+    }
+  }
+  return quotaHint(provider, model, msg) ?? signInHint(provider, msg) ?? msg.split(/\r?\n/).filter(Boolean).slice(-3).join(' ').slice(0, 400)
 }
 
 /** Turn "not signed in" failures into one clear instruction. */

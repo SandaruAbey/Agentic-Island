@@ -1,5 +1,5 @@
-import type { AiLimit, UsageRing } from '@shared/types'
-import { fmtTokens } from './ui'
+import type { AiLimit, AudioDevice, UsageRing } from '@shared/types'
+import { Icon, fmtTokens } from './ui'
 
 /** "4h", "35m", "2d" until a reset. */
 export function untilShort(ts: number): string {
@@ -92,6 +92,76 @@ export function LimitCards({ limits }: { limits: AiLimit[] }) {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+/** Battery colour: green, yellow when getting low, red when it needs charging. */
+export const batteryColor = (pct: number) => (pct <= 20 ? '#ff453a' : pct <= 40 ? '#ffd60a' : '#30d158')
+
+/** Earbuds/headphones battery as a ring in the same style as the AI-usage rings, with the earbuds icon in the middle. */
+export function BudsRing({ d, size = 32 }: { d: AudioDevice; size?: number }) {
+  const c = size / 2
+  const sw = Math.max(2.5, size * 0.1)
+  const r = c - sw / 2
+  const circ = 2 * Math.PI * r
+  const pct = d.battery
+  const tip = `${d.name}${pct !== null ? ` · ${pct}% battery` : ' · connected'}`
+  return (
+    <div className="ring buds-ring" title={tip} aria-label={tip} role="img" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle cx={c} cy={c} r={r} fill="none" stroke="#2c2c2e" strokeWidth={sw} />
+        {pct !== null && (
+          <circle
+            cx={c}
+            cy={c}
+            r={r}
+            fill="none"
+            stroke={batteryColor(pct)}
+            strokeWidth={sw}
+            strokeLinecap="round"
+            strokeDasharray={circ}
+            strokeDashoffset={circ * (1 - Math.max(pct, 1) / 100)}
+            transform={`rotate(-90 ${c} ${c})`}
+            style={{ transition: 'stroke-dashoffset .6s ease, stroke .6s ease' }}
+          />
+        )}
+      </svg>
+      <Icon name="buds" size={Math.round(size * 0.44)} className="buds-ring-ico" />
+    </div>
+  )
+}
+
+/** Home: connected earbuds/headphones in detail. */
+export function BudsCards({ devices }: { devices: AudioDevice[] }) {
+  if (!devices.length) return null
+  return (
+    <div className="buds-cards">
+      {devices.map(d => {
+        const pct = d.battery
+        const state = pct === null ? 'Battery level not reported by this device' : pct <= 20 ? 'Low — charge soon' : pct <= 40 ? 'Getting low' : 'Good'
+        return (
+          <div key={d.name} className="buds-card">
+            <BudsRing d={d} size={56} />
+            <div className="buds-card-meta">
+              <strong>{d.name}</strong>
+              <span>
+                {pct !== null && (
+                  <b style={{ color: batteryColor(pct) }}>{pct}%</b>
+                )}
+                {pct !== null && ' battery · '}
+                {state}
+              </span>
+              <em>Connected over Bluetooth</em>
+            </div>
+            {pct !== null && (
+              <div className="buds-bar" aria-hidden="true">
+                <i style={{ width: `${Math.max(pct, 2)}%`, background: batteryColor(pct) }} />
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }

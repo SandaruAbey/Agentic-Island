@@ -174,7 +174,7 @@ export class GitWatcher {
   start(): void {
     this.stop()
     void this.tick()
-    this.timer = setInterval(() => void this.tick(), 4000)
+    this.timer = setInterval(() => void this.tick(), 8000)
   }
 
   stop(): void {

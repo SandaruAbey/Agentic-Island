@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from 'react'
 import { Icon } from './ui'
+import { FileCard, ImagePreview, LinkCard } from './Cards'
 
 type Block =
   | { kind: 'p'; lines: string[] }
@@ -15,8 +16,14 @@ type Block =
 const UL = /^\s*[-*•]\s+(.*)$/
 const OL = /^\s*(\d+)[.)]\s+(.*)$/
 
+/** Isla's tool tags ([TOOL:COMPUTER …], [TOOL:REMINDER …]) are instructions for the app, not for the reader. */
+const TOOL_TAG = /^\s*\[TOOL:[A-Z]+\b[^\]]*\]\s*$/
+
 function parseBlocks(src: string): Block[] {
-  const lines = src.replace(/\r\n?/g, '\n').split('\n')
+  const lines = src
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .filter(l => !TOOL_TAG.test(l))
   const out: Block[] = []
   let i = 0
   const last = () => out[out.length - 1]
@@ -89,14 +96,35 @@ function parseBlocks(src: string): Block[] {
   return out.filter(b => b.kind !== 'p' || b.lines.length)
 }
 
-const INLINE =
-  /(`[^`\n]+`)|(\*\*[^*\n]+?\*\*|__[^_\n]+?__)|(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"*])|(\*[^*\s](?:[^*\n]*[^*\s])?\*|(?<![\w])_[^_\s](?:[^_\n]*[^_\s])?_(?![\w]))/g
+/**
+ * A Windows path: to a file ("C:\Users\me\CV (1).pdf" — spaces allowed, ends at its extension),
+ * or to a folder (no spaces).
+ */
+const WIN_PATH =
+  /(?<![\w])[A-Za-z]:[\\/](?:[^\\/:*?"<>|\r\n]+[\\/])*[^\\/:*?"<>|\r\n]*?\.[A-Za-z0-9]{1,8}(?=$|[\s)\]"'*,;:!?]|\.(?:\s|$))|(?<![\w])[A-Za-z]:[\\/][^\s*?"<>|:`]*[^\s*?"<>|:`.,;)]/
+  .source
+const IS_PATH = new RegExp(`^(?:${WIN_PATH})$`)
+const IMAGE_URL = /\.(png|jpe?g|gif|webp|avif|bmp)(\?\S*)?$/i
+
+const INLINE = new RegExp(
+  [
+    /(`[^`\n]+`)/.source,
+    /(\*\*[^*\n]+?\*\*|__[^_\n]+?__)/.source,
+    /(!\[[^\]\n]*\]\(https?:\/\/[^)\s]+\))/.source,
+    /(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))/.source,
+    `(${WIN_PATH})`,
+    /(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"*])/.source,
+    /(\*[^*\s](?:[^*\n]*[^*\s])?\*|(?<![\w])_[^_\s](?:[^_\n]*[^_\s])?_(?![\w]))/.source
+  ].join('|'),
+  'g'
+)
 
 function openLink(url: string) {
   void window.island.openUrl(url)
 }
 
-function inline(text: string, key = 'i'): ReactNode[] {
+/** `previews`: the answer is finished, so images may be fetched and shown. */
+function inline(text: string, key = 'i', previews = false): ReactNode[] {
   const nodes: ReactNode[] = []
   let last = 0
   let n = 0
@@ -104,14 +132,29 @@ function inline(text: string, key = 'i'): ReactNode[] {
     const at = m.index ?? 0
     if (at > last) nodes.push(text.slice(last, at))
     const k = `${key}-${n++}`
-    const [all, code, bold, link, url, italic] = m
-    if (code) nodes.push(<code key={k}>{code.slice(1, -1)}</code>)
-    else if (bold) nodes.push(<strong key={k}>{inline(bold.slice(2, -2), k)}</strong>)
+    const [all, code, bold, image, link, path, url, italic] = m
+    if (code) {
+      const c = code.slice(1, -1).trim()
+      nodes.push(IS_PATH.test(c) ? <FileCard key={k} path={c} /> : <code key={k}>{code.slice(1, -1)}</code>)
+    } else if (bold) nodes.push(<strong key={k}>{inline(bold.slice(2, -2), k, previews)}</strong>)
+    else if (path) nodes.push(<FileCard key={k} path={path} />)
+    else if (image) {
+      const im = image.match(/^!\[([^\]]*)\]\((.+)\)$/)!
+      nodes.push(
+        previews ? (
+          <ImagePreview key={k} url={im[2]} alt={im[1]} />
+        ) : (
+          <a key={k} className="md-link" href={im[2]} title={im[2]} onClick={e => (e.preventDefault(), openLink(im[2]))}>
+            {im[1] || 'image'}
+          </a>
+        )
+      )
+    } else if (url && previews && IMAGE_URL.test(url)) nodes.push(<ImagePreview key={k} url={url} />)
     else if (link) {
       const lm = link.match(/^\[([^\]]+)\]\((.+)\)$/)!
       nodes.push(
         <a key={k} className="md-link" href={lm[2]} title={lm[2]} onClick={e => (e.preventDefault(), openLink(lm[2]))}>
-          {inline(lm[1], k)}
+          {inline(lm[1], k, previews)}
         </a>
       )
     } else if (url) {
@@ -120,7 +163,7 @@ function inline(text: string, key = 'i'): ReactNode[] {
           {url.replace(/^https?:\/\/(www\.)?/, '')}
         </a>
       )
-    } else if (italic) nodes.push(<em key={k}>{inline(italic.slice(1, -1), k)}</em>)
+    } else if (italic) nodes.push(<em key={k}>{inline(italic.slice(1, -1), k, previews)}</em>)
     else nodes.push(all)
     last = at + all.length
   }
@@ -153,8 +196,24 @@ function ToolChip({ raw }: { raw: string }) {
   )
 }
 
-export function Markdown({ text }: { text: string }) {
+/** Web pages referenced in the answer (not images) — shown as preview cards under it. */
+function referencedLinks(blocks: Block[]): string[] {
+  const out: string[] = []
+  for (const b of blocks) {
+    const texts = b.kind === 'p' || b.kind === 'quote' ? b.lines : b.kind === 'ul' || b.kind === 'ol' ? b.items : b.kind === 'h' ? [b.text] : []
+    for (const t of texts) {
+      for (const m of t.replace(/!\[[^\]\n]*\]\([^)]*\)/g, '').matchAll(/https?:\/\/[^\s<>()\]]*[^\s<>().,;:!?'"*\]]/g)) {
+        if (!IMAGE_URL.test(m[0]) && !out.includes(m[0])) out.push(m[0])
+      }
+    }
+  }
+  return out.slice(0, 4)
+}
+
+/** `previews`: the answer is finished — show link and image previews (they are fetched, so not while streaming). */
+export function Markdown({ text, previews = false }: { text: string; previews?: boolean }) {
   const blocks = useMemo(() => parseBlocks(text), [text])
+  const links = useMemo(() => (previews ? referencedLinks(blocks) : []), [blocks, previews])
   return (
     <>
       {blocks.map((b, i) => {
@@ -166,20 +225,20 @@ export function Markdown({ text }: { text: string }) {
                 {b.lines.map((l, j) => (
                   <span key={j}>
                     {j > 0 && <br />}
-                    {inline(l, `${k}-${j}`)}
+                    {inline(l, `${k}-${j}`, previews)}
                   </span>
                 ))}
               </p>
             )
           case 'h': {
             const Tag = (`h${Math.min(4, b.level)}` as 'h1' | 'h2' | 'h3' | 'h4')
-            return <Tag key={k}>{inline(b.text, k)}</Tag>
+            return <Tag key={k}>{inline(b.text, k, previews)}</Tag>
           }
           case 'ul':
             return (
               <ul key={k}>
                 {b.items.map((it, j) => (
-                  <li key={j}>{inline(it, `${k}-${j}`)}</li>
+                  <li key={j}>{inline(it, `${k}-${j}`, previews)}</li>
                 ))}
               </ul>
             )
@@ -187,7 +246,7 @@ export function Markdown({ text }: { text: string }) {
             return (
               <ol key={k} start={b.start}>
                 {b.items.map((it, j) => (
-                  <li key={j}>{inline(it, `${k}-${j}`)}</li>
+                  <li key={j}>{inline(it, `${k}-${j}`, previews)}</li>
                 ))}
               </ol>
             )
@@ -198,7 +257,7 @@ export function Markdown({ text }: { text: string }) {
               </pre>
             )
           case 'quote':
-            return <blockquote key={k}>{inline(b.lines.join(' '), k)}</blockquote>
+            return <blockquote key={k}>{inline(b.lines.join(' '), k, previews)}</blockquote>
           case 'hr':
             return <hr key={k} />
           case 'tools':
@@ -217,6 +276,13 @@ export function Markdown({ text }: { text: string }) {
             )
         }
       })}
+      {links.length > 0 && (
+        <div className="link-cards">
+          {links.map(u => (
+            <LinkCard key={u} url={u} />
+          ))}
+        </div>
+      )}
     </>
   )
 }
@@ -226,7 +292,7 @@ export function toPlainText(md: string): string {
   return md
     .replace(/\r\n?/g, '\n')
     .split('\n')
-    .filter(l => !/^\s*(▸ |⚠)/.test(l) && !/^\s*```/.test(l))
+    .filter(l => !/^\s*(▸ |⚠|⏸)/.test(l) && !/^\s*```/.test(l) && !TOOL_TAG.test(l))
     .map(l =>
       l
         .replace(/^\s*#{1,6}\s+/, '')

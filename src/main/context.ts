@@ -1,36 +1,11 @@
-import { spawn, type ChildProcess } from 'node:child_process'
 import type { ActivityContext } from '@shared/types'
-import { killTree } from './agents'
+import { winHelper } from './winhelper'
 
 /**
  * Watches which window is in front so Isla can offer relevant help.
- * One long-lived PowerShell process polls GetForegroundWindow and prints only when it changes.
+ * The shared Windows helper polls GetForegroundWindow and prints only when it changes.
  * Window titles stay on this PC: they drive local rules and are never logged or sent to an AI.
  */
-const SCRIPT = `
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-Add-Type @"
-using System; using System.Runtime.InteropServices; using System.Text;
-public class IslandFG {
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
-}
-"@
-$last = ''
-while ($true) {
-  $h = [IslandFG]::GetForegroundWindow()
-  $sb = New-Object System.Text.StringBuilder 512
-  [void][IslandFG]::GetWindowText($h, $sb, 512)
-  $procId = 0
-  [void][IslandFG]::GetWindowThreadProcessId($h, [ref]$procId)
-  $name = ''
-  try { $name = (Get-Process -Id $procId -ErrorAction Stop).ProcessName } catch {}
-  $line = $name + [char]31 + $sb.ToString() + [char]31 + $procId
-  if ($line -ne $last) { $last = $line; [Console]::Out.WriteLine($line); [Console]::Out.Flush() }
-  Start-Sleep -Milliseconds 1500
-}
-`
 
 const BROWSERS = /^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen)$/i
 const MAIL_APPS = /^(outlook|olk|hxoutlook|thunderbird|mailbird|em ?client)$/i
@@ -42,6 +17,14 @@ const IDE_NAMES = /^(visual studio code( - insiders)?|visual studio|cursor|antig
 const SIGN_IN = /(sign[ -]?in|log[ -]?in|verify|verification|2-step|two[- ]factor|authenticat|one[- ]time|\botp\b|security code|confirm your)/i
 const MAIL_TITLE = /(gmail|outlook|inbox|yahoo mail|proton mail|mail -)/i
 const CHAT_TITLE = /(microsoft teams|slack|discord|whatsapp|messenger|telegram)/i
+const CHAT_NAMES: [RegExp, string][] = [
+  [/microsoft teams/i, 'Teams'],
+  [/slack/i, 'Slack'],
+  [/discord/i, 'Discord'],
+  [/whatsapp/i, 'WhatsApp'],
+  [/messenger/i, 'Messenger'],
+  [/telegram/i, 'Telegram']
+]
 
 export function classify(process: string, title: string, pid = 0): ActivityContext | null {
   if (!process || /^(agentic island|electron|explorer|searchhost|shellexperiencehost|lockapp)$/i.test(process)) return null
@@ -66,7 +49,8 @@ export function classify(process: string, title: string, pid = 0): ActivityConte
     if (project && /^(welcome|get started|settings|extensions|untitled.*)$/i.test(project)) project = null
   }
   const segments = title.split(/ [-—|] /)
-  const app = kind === 'browser' || kind === 'mail' ? segments[segments.length - 1] || process : process
+  const chatApp = kind === 'chat' && BROWSERS.test(process) ? CHAT_NAMES.find(([re]) => re.test(title))?.[1] : undefined
+  const app = chatApp ?? (kind === 'browser' || kind === 'mail' ? segments[segments.length - 1] || process : process)
   return {
     app: app.slice(0, 40),
     process,
@@ -78,49 +62,55 @@ export function classify(process: string, title: string, pid = 0): ActivityConte
   }
 }
 
+/** Foreground window bounds in physical screen pixels. */
+export interface WinRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+function parseRect(v: string | undefined): WinRect | null {
+  const n = (v ?? '').split(',').map(Number)
+  if (n.length !== 4 || n.some(x => !Number.isFinite(x))) return null
+  const [l, t, r, b] = n
+  return r - l > 0 && b - t > 0 ? { x: l, y: t, width: r - l, height: b - t } : null
+}
+
 export class ContextWatcher {
   current: ActivityContext | null = null
-  private proc: ChildProcess | null = null
-  private restart: NodeJS.Timeout | null = null
+  /** Bounds of the window in front (including ones we ignore, like our own) — used to crop screen captures. */
+  rect: WinRect | null = null
+  private started = false
+  /** An ignored window (ours, the taskbar…) is in front — its moves must not replace the user's window bounds. */
+  private ignoring = false
 
   constructor(private onChange: (a: ActivityContext | null) => void) {}
 
   start(): void {
-    if (this.proc) return
-    const encoded = Buffer.from(SCRIPT, 'utf16le').toString('base64')
-    const p = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], {
-      windowsHide: true
-    })
-    this.proc = p
-    let buf = ''
-    p.stdout.setEncoding('utf8')
-    p.stdout.on('data', (d: string) => {
-      buf += d
-      const lines = buf.split(/\r?\n/)
-      buf = lines.pop() ?? ''
-      for (const line of lines) {
-        const [proc, title = '', pid = '0'] = line.split('\x1f')
-        const next = classify(proc?.trim() ?? '', title.trim(), Number(pid) || 0)
-        // Ignore our own window so the context stays on the app the user was really using.
-        if (!next) continue
-        this.current = next
-        this.onChange(next)
-      }
-    })
-    p.on('close', () => {
-      if (this.proc !== p) return
-      this.proc = null
-      // Restart if it died unexpectedly.
-      this.restart = setTimeout(() => this.start(), 10_000)
-    })
+    if (this.started) return
+    this.started = true
+    winHelper.onRect = r => {
+      if (!this.ignoring) this.rect = parseRect(r)
+    }
+    winHelper.onForeground = line => {
+      const [proc, title = '', pid = '0', rect] = line.split('')
+      const next = classify(proc?.trim() ?? '', title.trim(), Number(pid) || 0)
+      // Ignore our own window so the context stays on the app the user was really using.
+      this.ignoring = !next
+      if (!next) return
+      this.rect = parseRect(rect)
+      this.current = next
+      this.onChange(next)
+    }
+    winHelper.enable('fg')
   }
 
   stop(): void {
-    if (this.restart) clearTimeout(this.restart)
-    this.restart = null
-    const p = this.proc
-    this.proc = null
-    if (p) killTree(p.pid)
+    if (!this.started) return
+    this.started = false
+    winHelper.disable('fg')
+    this.rect = null
     if (this.current) {
       this.current = null
       this.onChange(null)
@@ -128,6 +118,6 @@ export class ContextWatcher {
   }
 
   get running(): boolean {
-    return this.proc !== null
+    return this.started
   }
 }

@@ -2396,3 +2396,592 @@ button.chip:hover {
     content: '…';
   }
 }
+
+/* ---------------------------------------------------------------- conversation */
+
+.answer.convo {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 14px 16px 18px;
+}
+.convo-head {
+  margin-bottom: -6px;
+}
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: fade-in 0.25s var(--spring) both;
+}
+.chat-q {
+  align-self: flex-end;
+  max-width: 78%;
+  padding: 9px 14px;
+  border-radius: 18px 18px 4px 18px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 13.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-handoff {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(191, 90, 242, 0.14);
+  color: #d7a6ff;
+  font-size: 11.5px;
+}
+.chat-handoff b {
+  color: #f0dcff;
+  font-weight: 600;
+}
+
+/* An answer in the conversation: a message bubble with a quiet footer, not a task card. */
+.run.chat {
+  align-self: flex-start;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+.run.chat .run-body {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.run.chat.pending-approval .run-body {
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 159, 10, 0.4);
+  background: rgba(255, 159, 10, 0.06);
+}
+.run.chat .chat-meta {
+  order: 3;
+  gap: 6px;
+}
+.run.chat .chat-meta span {
+  background: transparent;
+  padding: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.run.chat .chat-meta span + span::before {
+  content: '·';
+  margin-right: 6px;
+  color: #48484a;
+}
+.run.chat .chat-meta .status-pill {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 10.5px;
+}
+.run.chat .chat-meta .status-pill + span::before,
+.run.chat .chat-meta .status-pill::before {
+  content: none;
+}
+.output.md.prose.chat-bubble {
+  order: 1;
+  margin: 0;
+  max-width: 94%;
+  max-height: none;
+  padding: 12px 14px;
+  border-radius: 18px 18px 18px 4px;
+  background: var(--card);
+  border: 1px solid var(--line);
+}
+.run.chat .actions {
+  order: 2;
+  margin-top: 0;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.run.chat .actions .btn {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.run.chat .approve-note {
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------- "tell Isla what you need" boxes */
+
+.peek-ask {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 290px;
+}
+.peek-ask input,
+.sug-ask input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #1c1c1e;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.peek-ask input:focus,
+.sug-ask input:focus {
+  border-color: var(--blue);
+}
+.suggestions li {
+  flex-wrap: wrap;
+}
+.sug-ask {
+  flex-basis: 100%;
+  display: flex;
+  gap: 6px;
+  padding-left: 42px;
+}
+
+/* ---------------------------------------------------------------- file, link and image cards in answers */
+
+.file-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  min-width: 220px;
+  margin: 3px 0;
+  padding: 6px 6px 6px 6px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  vertical-align: middle;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.file-card:hover,
+.file-card:focus-visible {
+  background: var(--card-2);
+  border-color: rgba(10, 132, 255, 0.5);
+  outline: none;
+}
+.file-thumb,
+.file-ico {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #2c2c2e;
+}
+.file-ico {
+  display: grid;
+  place-items: center;
+  color: var(--blue);
+}
+.file-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.file-meta strong {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-meta em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-reveal {
+  flex: none;
+}
+.md-path {
+  word-break: break-all;
+}
+
+.link-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.link-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--text);
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+.link-card:hover {
+  background: var(--card-2);
+  border-color: rgba(10, 132, 255, 0.5);
+}
+.link-card img {
+  width: 100%;
+  height: 96px;
+  object-fit: cover;
+  background: #2c2c2e;
+}
+.link-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  min-width: 0;
+}
+.link-meta strong {
+  font-size: 12.5px;
+  font-weight: 600;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.link-meta span {
+  font-size: 11.5px;
+  color: #c7c7cc;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.link-meta em {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.md-img {
+  display: inline-block;
+  max-width: 100%;
+  margin: 6px 0;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  vertical-align: top;
+}
+.md-img img {
+  display: block;
+  max-width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+  background: #1c1c1e;
+}
+.md-img.loading {
+  padding: 18px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  background: var(--card);
+}
+
+/* ---------------------------------------------------------------- earbuds: battery ring like the AI-usage rings */
+
+.buds-pill {
+  display: grid;
+  place-items: center;
+  flex: none;
+  cursor: pointer;
+}
+.buds-ring {
+  position: relative;
+}
+.buds-ring-ico {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  color: #f2f2f7;
+}
+
+.buds-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.buds-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+.buds-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.buds-card-meta strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.buds-card-meta span {
+  font-size: 12.5px;
+  color: #d1d1d6;
+}
+.buds-card-meta b {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.buds-card-meta em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+}
+.buds-bar {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: 999px;
+  background: #2c2c2e;
+  overflow: hidden;
+}
+.buds-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.6s ease, background 0.6s ease;
+}
+.peek-device {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #fff;
+  color: #000;
+  flex: none;
+}
+
+.about {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11.5px;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------- conversation: one card, answers with a quiet footer */
+
+.answer.convo {
+  gap: 16px;
+  padding: 14px 14px 12px;
+}
+.chat-a {
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 92%;
+  min-width: 180px;
+}
+.chat-a .output.md.prose.chat-bubble {
+  max-width: 100%;
+  padding: 10px 14px;
+  border-radius: 18px 18px 18px 6px;
+}
+.chat-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  min-height: 22px;
+}
+.chat-foot-meta {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+.chat-dot.running {
+  background: var(--green);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.chat-dot.pending-approval {
+  background: var(--orange);
+}
+.chat-dot.error,
+.chat-dot.killed {
+  background: var(--red);
+}
+.chat-dot.done {
+  background: var(--green);
+}
+.chat-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: 7px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  justify-content: center;
+}
+.chat-act:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+.chat-act.stop {
+  color: var(--red);
+}
+.chat-act.stop:hover {
+  background: rgba(255, 69, 58, 0.14);
+  color: var(--red);
+}
+.chat-note {
+  padding: 0 6px;
+  font-size: 11px;
+  color: #7cbcff;
+}
+.chat-approve {
+  padding: 10px 12px;
+  border-radius: 16px 16px 16px 6px;
+  border: 1px solid rgba(255, 159, 10, 0.35);
+  background: rgba(255, 159, 10, 0.07);
+  font-size: 13px;
+  line-height: 1.5;
+  color: #e5e5ea;
+}
+.chat-approve p {
+  margin: 0 0 8px;
+}
+.chat-approve .prompt-preview {
+  margin: 0 0 8px;
+  max-height: 160px;
+}
+.chat-approve-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The reply box lives inside the conversation card: same surface, a hairline above it. */
+.composer.in-convo {
+  margin: 2px -2px 0;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.composer.in-convo textarea {
+  min-height: 38px;
+}
+
+/* ---------------------------------------------------------------- earbuds in the header, next to the tabs */
+
+.head-buds {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  max-width: 150px;
+  padding: 3px 10px 3px 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  cursor: default;
+}
+.head-buds > span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+.head-buds strong {
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.head-buds em {
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- a reminder that is ringing (Home) */
+
+.alert-ring {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px 10px 10px 12px;
+  border-radius: 16px;
+  background: rgba(255, 159, 10, 0.1);
+  border: 1px solid rgba(255, 159, 10, 0.35);
+  animation: fade-in 0.3s var(--spring) both;
+}
+.alert-ring.meeting {
+  background: rgba(48, 209, 88, 0.08);
+  border-color: rgba(48, 209, 88, 0.35);
+}
+.alert-ring-ico {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #fff;
+  color: #000;
+  flex: none;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.alert-ring-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.alert-ring-text strong {
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.alert-ring-text span {
+  font-size: 11.5px;
+  color: var(--muted);
+}

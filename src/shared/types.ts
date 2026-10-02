@@ -123,6 +123,8 @@ export interface Settings {
   google: { clientId: string; clientSecret: string }
   /** Show now-playing media with controls in the island. */
   mediaControls: boolean
+  /** Show connected Bluetooth earbuds/headphones and their battery on the island. */
+  earbuds: boolean
   dock: DockState
   usageLimits: UsageLimitConfig
   activeProvider: ProviderId
@@ -146,6 +148,12 @@ export interface Settings {
   launchAtLogin: boolean
   /** Per-app screen reading permissions. Apps not listed follow the default (allowed). */
   appPermissions: AppPermission[]
+  /** Let approved tasks operate the PC through Isla's tools (mail, files, windows, Isla's own browser). */
+  computer: {
+    enabled: boolean
+    /** Allow the real mouse/keyboard as a last resort (every use is confirmed on the island). */
+    realInput: boolean
+  }
   assistant: {
     /** @deprecated No longer user-facing — General questions always use activeProvider now. Kept only so old settings.json files still deep-merge cleanly; always normalized back to 'auto' on load. */
     provider: ProviderId | 'auto'
@@ -167,6 +175,8 @@ export interface Settings {
     autoReviewCommits: boolean
     /** Always ask user permission before any web-reaching operation (fetch, search). */
     webApprovalRequired: boolean
+    /** Show previews (title, picture) for links and images in answers. Fetched by Isla, with private addresses blocked. */
+    linkPreviews: boolean
   }
 }
 
@@ -205,6 +215,16 @@ export interface AgentRun {
   hasMail: boolean
   /** Set when this run was fired by the TaskScheduler — links back to ScheduledTask.id. */
   scheduledTaskId?: string
+  /** Set by the main process only: the run may operate the PC through Isla's computer-control tools. */
+  computer?: boolean
+  /** Conversation this run belongs to (follow-ups share it); the first run's id. */
+  threadId?: string
+  /** What the user typed (the prompt may also carry history, mail or screen text). */
+  question?: string
+  /** In a live update: output unchanged since the last one, so it was left out (the island keeps its copy). */
+  outputOmitted?: boolean
+  /** Computer runs: the user already allowed PC work for this conversation (a quick continuation) — no first-use prompt. */
+  preApproved?: boolean
 }
 
 export type RunContext = 'general' | 'project'
@@ -220,6 +240,53 @@ export interface RunRequest {
   workspace?: string
   /** Attach these emails (by uid) as context. Codes inside them are redacted. */
   mailUids?: string[]
+  /** Continue this conversation (set by the main process). */
+  threadId?: string
+}
+
+/** A connected Bluetooth audio device (earbuds, headphones) and its battery, as Windows reports it. */
+export interface AudioDevice {
+  name: string
+  /** 0–100, or null when the device doesn't report it. */
+  battery: number | null
+}
+
+/** A file mentioned in an answer, for its card. */
+export interface FileInfo {
+  path: string
+  name: string
+  dir: string
+  isDir: boolean
+  size: number
+  modified: number
+  /** Windows shell thumbnail (images, PDFs, videos, Office files…) as a data URL. */
+  thumb: string | null
+}
+
+/** Preview of a web link or image in an answer (fetched by the main process, never by the page). */
+export interface LinkPreview {
+  url: string
+  site: string
+  title: string
+  description: string
+  /** data: URL */
+  image: string | null
+}
+
+/** Where a Home question goes: the two run contexts, or a task that operates the PC. */
+export type AskContext = RunContext | 'computer'
+
+/** A risky step a computer-control task wants to take — it waits for Allow / Deny on the island. */
+export interface PendingAction {
+  id: string
+  runId: string
+  runTitle: string
+  /** e.g. "Click “Send” in Isla browser". */
+  summary: string
+  /** Why Isla is asking. */
+  reason: string
+  createdAt: number
+  expiresAt: number
 }
 
 export type TaskRecurrence =
@@ -416,7 +483,7 @@ export type SuggestionAction =
   | { type: 'copy-otp'; id: string }
   | { type: 'open-panel'; panel: PanelId }
   | { type: 'ask'; text: string; context: RunContext }
-  | { type: 'do'; title: string; prompt: string }
+  | { type: 'do'; title: string; prompt: string; /** Ask the user what they want first (shown as a text box). */ askUser?: string }
   | { type: 'commit'; push: boolean }
   | { type: 'add-workspace' }
 
@@ -445,6 +512,16 @@ export interface SecurityState {
   killShortcut: string
 }
 
+/** A one-off meeting / alarm / reminder set from chat. */
+export interface Reminder {
+  id: string
+  kind: 'meeting' | 'alarm' | 'reminder'
+  title: string
+  url?: string
+  targetAt: number
+  createdAt: number
+}
+
 export interface IslandSnapshot {
   settings: Settings
   providers: ProviderStatus[]
@@ -469,6 +546,18 @@ export interface IslandSnapshot {
   version: string
   scheduledTasks: ScheduledTask[]
   schedulerStats: { runsLastHour: number; limitPerHour: number }
+  /** Upcoming reminders, soonest first. */
+  reminders: Reminder[]
+  /** Reminders that went off and wait for you (Join / Snooze / Done). */
+  alerts: Reminder[]
+  /** Computer-control steps waiting for your OK. */
+  pendingActions: PendingAction[]
+  /** Isla's own browser window exists (it may be hidden). */
+  browserOpen: boolean
+  /** Antigravity CLI and computer control: null = agy not installed, false = not connected yet, true = connected. */
+  antigravityComputer: boolean | null
+  /** Connected Bluetooth earbuds/headphones with battery. */
+  audioDevices: AudioDevice[]
 }
 
 export type IslandEvent =
@@ -476,12 +565,16 @@ export type IslandEvent =
   | { type: 'run-output'; id: string; chunk: string }
   | { type: 'dock'; dock: DockState }
   | { type: 'media'; media: MediaState | null }
-  | { type: 'notify'; kind: 'otp' | 'mail' | 'run-done' | 'run-error' | 'security' | 'info' | 'suggest' | 'commit' | 'reminder'
+  | { type: 'notify'; kind: 'otp' | 'mail' | 'run-done' | 'run-error' | 'security' | 'info' | 'suggest' | 'commit' | 'reminder' | 'action' | 'device'
       title: string
       body: string
       url?: string
       uid?: string
       suggestionId?: string
+      /** For computer-control confirmations: the PendingAction id. */
+      actionId?: string
+      /** For a reminder that is ringing: its id (Join / Snooze / Done). */
+      reminderId?: string
       /** For suggestion peeks: which kind, so Isla's face can match it. */
       icon?: Suggestion['icon']
     }
@@ -489,7 +582,10 @@ export type IslandEvent =
 /** API exposed on window.island by the preload script. */
 export interface IslandApi {
   getSnapshot(): Promise<IslandSnapshot>
-  ask(text: string, context: RunContext): Promise<AskResult>
+  ask(text: string, context: AskContext, threadId?: string | null): Promise<AskResult>
+  fileInfo(path: string): Promise<FileInfo | null>
+  openFile(path: string, reveal?: boolean): Promise<{ ok: boolean; message: string }>
+  linkPreview(url: string): Promise<LinkPreview | null>
   readMail(uid: string): Promise<MailMessage>
   refreshInbox(): Promise<MailSummary[]>
   onEvent(cb: (e: IslandEvent) => void): () => void
@@ -521,12 +617,17 @@ export interface IslandApi {
   updateTask(id: string, patch: Partial<ScheduledTaskInput> & { enabled?: boolean }): Promise<ScheduledTask>
   deleteTask(id: string): Promise<void>
   runTaskNow(id: string): Promise<AgentRun>
+  deleteReminder(id: string): Promise<void>
+  ackReminder(id: string, action: 'done' | 'snooze' | 'open'): Promise<void>
+  decideAction(id: string, allow: boolean): Promise<void>
+  showBrowser(show: boolean): Promise<void>
+  connectAntigravity(): Promise<{ ok: boolean; message: string }>
   toggleTask(id: string, enabled: boolean): Promise<void>
   openInAntigravity(prompt: string): Promise<{ ok: boolean; message: string }>
   gitAction(op: 'push' | 'pull' | 'fetch'): Promise<{ ok: boolean; message: string }>
   commit(message: string, push: boolean, diffHash: string, allowSecrets?: boolean): Promise<{ ok: boolean; message: string }>
   reviewChanges(): Promise<CommitProposal | null>
-  doSuggestion(id: string): Promise<AgentRun>
+  doSuggestion(id: string, request?: string): Promise<AgentRun>
   copyText(text: string): Promise<void>
   copyOtp(id: string): Promise<boolean>
   dismissOtp(id: string): Promise<void>

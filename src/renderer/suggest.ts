@@ -14,6 +14,7 @@ export function actionLabel(s: Suggestion): string {
   const a = s.action
   switch (a.type) {
     case 'do':
+      if (a.askUser) return 'Ask Isla'
       return s.icon === 'chat' ? 'Write reply' : s.icon === 'translate' ? 'Translate' : s.icon === 'mail' ? (/repl/i.test(s.title) ? 'Draft reply' : 'Summarize') : 'Do it'
     case 'commit':
       return a.push ? 'Commit & push' : 'Commit'
@@ -50,12 +51,13 @@ export const SUGGEST_FACE: Record<Suggestion['icon'], IslaAnimation> = {
 }
 
 /** Run a suggestion's action. Shared by the island peek, the ✨ button and Home. */
-export async function actOn(s: Suggestion, snap: IslandSnapshot): Promise<Outcome> {
+/** `request`: what the user typed for suggestions that ask first ("Need help with this page?"). */
+export async function actOn(s: Suggestion, snap: IslandSnapshot, request?: string): Promise<Outcome> {
   const a = s.action
   try {
     switch (a.type) {
       case 'do':
-        return { kind: 'run', run: await window.island.doSuggestion(s.id) }
+        return { kind: 'run', run: await window.island.doSuggestion(s.id, request) }
       case 'run':
         return { kind: 'run', run: await window.island.requestRun(a.request) }
       case 'ask':
