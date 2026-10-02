@@ -15,7 +15,7 @@ import { winHelper } from './winhelper'
 const PRIVATE = /(1password|bitwarden|keepass|lastpass|dashlane|nordpass|password|passwort|credential|bank|banking|paypal|wallet|incognito|inprivate|private browsing|authenticator|recovery code|seed phrase)/i
 
 /** Longest side of the capture; plenty for OCR and keeps the bitmap small. */
-const MAX_SIDE = 2200
+const MAX_SIDE = 1500
 
 export class ScreenReader {
   private file: string
