@@ -1,5 +1,16 @@
-import { ImapFlow } from 'imapflow'
-import { simpleParser, type ParsedMail } from 'mailparser'
+import type { ImapFlow } from 'imapflow'
+import type { ParsedMail } from 'mailparser'
+
+// The mail libraries are loaded only when an inbox is actually connected, so they cost no memory otherwise.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const loadImap = async (): Promise<typeof ImapFlow> => {
+  const m: any = await import('imapflow')
+  return m.ImapFlow ?? m.default?.ImapFlow
+}
+const simpleParser = async (src: Buffer): Promise<ParsedMail> => {
+  const m: any = await import('mailparser')
+  return (m.simpleParser ?? m.default?.simpleParser)(src)
+}
 import { randomUUID } from 'node:crypto'
 import type { MailConfig, MailMessage, MailSummary, OtpCode } from '@shared/types'
 
@@ -110,7 +121,7 @@ export class MailWatcher {
     this.status = 'connecting'
     this.error = null
     this.onChange()
-    const client = new ImapFlow({
+    const client = new (await loadImap())({
       host: cfg.host,
       port: cfg.port,
       secure: cfg.secure,
@@ -325,7 +336,7 @@ export class MailWatcher {
 
   async test(cfg: MailConfig, password: string | null): Promise<{ ok: boolean; message: string }> {
     if (!cfg.user || !password) return { ok: false, message: 'Enter email and app password first.' }
-    const c = new ImapFlow({ host: cfg.host, port: cfg.port, secure: cfg.secure, auth: { user: cfg.user, pass: password }, logger: false })
+    const c = new (await loadImap())({ host: cfg.host, port: cfg.port, secure: cfg.secure, auth: { user: cfg.user, pass: password }, logger: false })
     try {
       await c.connect()
       const st = await c.status('INBOX', { messages: true })

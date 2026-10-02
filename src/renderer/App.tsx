@@ -274,7 +274,7 @@ export function App() {
     // the orange/green dot on the pill still shows that.
     if (isPlaying(media)) return 'dancing'
     if (pending.length) return 'suspicious'
-    if (running.length) return running.some(r => r.title.startsWith('Predict')) ? 'thinking' : 'working'
+    if (running.length) return 'working'
     if (mode === 'expanded' && panel === 'git') return 'searching'
     if (mode === 'expanded') return 'idle'
     if (snap?.git?.conflicted) return 'confused'

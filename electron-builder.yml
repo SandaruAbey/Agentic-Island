@@ -35,3 +35,5 @@ extraResources:
     to: .
     filter:
       - google-oauth.json
+      # Native helper (replaces the PowerShell helpers — see native/IslaHelper.cs).
+      - IslaHelper.exe

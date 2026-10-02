@@ -1,3 +1,4 @@
+import { winHelper } from './winhelper'
 import {
   app,
   desktopCapturer,
@@ -44,12 +45,13 @@ import type {
 } from '@shared/types'
 import { audit, getSettings, loadSettings, patchSettings, readAudit, readSecret, replaceSettings, writeSecret } from './store'
 import { AgentManager, HEADLESS_DENIED, isInsideWorkspace, spawnSafe } from './agents'
-import { GitWatcher, commitAll, diffForReview, diffSummary, runGitOp, scanSecrets } from './git'
+import { GitWatcher, commitAll, diffForReview, runGitOp, scanSecrets } from './git'
 import { MailWatcher } from './mail'
 import { GmailWatcher, googleSignIn, revokeGoogle, type GoogleClient } from './google'
 import { MailHub } from './mailhub'
 import { computeLimits, listAiProcesses, scanUsage } from './usage'
-import { buildSuggestions, PREDICT_PROMPT } from './proactive'
+import { buildSuggestions } from './proactive'
+import { runChatTool } from './chattools'
 import { ContextWatcher } from './context'
 import { MediaWatcher } from './media'
 import { MeetingManager } from './meetings'
@@ -86,10 +88,20 @@ function setWinBounds(r: Electron.Rectangle): void {
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let quitting = false
+
+// Last line of defence while shutting down: a timer that still touches the (already destroyed) window or tray must not
+// pop a "JavaScript error in the main process" box at the user. Real errors outside shutdown are still logged.
+process.on('uncaughtException', err => {
+  if (quitting && /destroyed/i.test(String(err?.message))) return
+  console.error(err)
+  try {
+    audit('app.error', String(err?.stack ?? err).slice(0, 400))
+  } catch {
+    /* audit not ready */
+  }
+})
 const security: SecurityState = { locked: false, lockedAt: null, activeRuns: 0, killShortcut: 'Ctrl+Alt+Shift+K' }
 const dismissed = new Set<string>()
-let lastPredictAt = 0
-let predictTimer: NodeJS.Timeout | null = null
 
 /** Reminders that went off and wait for the user: they peek again every 90 s until Join / Snooze / Done (max 1 h). */
 type Alert = Reminder & { firedAt: number; lastPing: number }
@@ -160,6 +172,14 @@ function ackReminder(id: string, action: 'done' | 'snooze' | 'open'): void {
   broadcastSoon()
 }
 
+// Low-memory mode (default): software rendering instead of a GPU process — Isla's RAM roughly halves and
+// the small pill renders just as smoothly. Must be decided before the app is ready, so read the file directly.
+try {
+  const raw = JSON.parse(readFileSync(join(app.getPath('userData'), 'settings.json'), 'utf8'))
+  if (raw?.lowMemory !== false) app.disableHardwareAcceleration()
+} catch {
+  app.disableHardwareAcceleration()
+}
 if (!app.requestSingleInstanceLock()) {
   app.quit()
   process.exit(0)
@@ -210,7 +230,6 @@ const git = new GitWatcher(
   () => getSettings().activeWorkspace,
   () => {
     broadcastSoon()
-    schedulePrediction()
     insight?.onGit(git.state)
   }
 )
@@ -646,16 +665,18 @@ async function ask(text: string, askCtx: AskContext, threadId: string | null = n
     : sec.text
   if (!t) return { type: 'error', message: 'Type something first.' }
   if (security.locked) return { type: 'error', message: 'Kill switch is engaged. Resume the island first.' }
-  // Meeting recording by voice of command: "record this meeting", "stop recording".
-  if (/^(please\s+)?(start\s+)?record(ing)?\s+(this\s+|the\s+|my\s+)?(meeting|call|screen)\b/i.test(t)) {
-    const r = await meetings.record()
-    return r.ok ? { type: 'chat', text: `🔴 ${r.message} It will be summarized when you stop or the call ends.` } : { type: 'error', message: r.message }
-  }
-  if (/^(please\s+)?stop\s+(the\s+)?record(ing)?\b/i.test(t)) {
-    if (meetings.state.phase !== 'recording') return { type: 'chat', text: 'Nothing is being recorded.' }
-    void meetings.stop('Stopped by you')
-    return { type: 'chat', text: 'Stopped. Summarizing the meeting now — I’ll pop up when it’s ready.' }
-  }
+  // Things Isla does itself — recordings, scheduled tasks, commit review — run directly from chat (no agent, no approval).
+  const toolReply = await runChatTool(t, {
+    recorder: meetings,
+    tasks: scheduler,
+    reviewChanges: async () => {
+      const p = await (insight?.review(true) ?? Promise.resolve(null))
+      return p ? { message: p.message, ok: p.ok, issues: p.issues, files: p.files } : null
+    },
+    ask: (sys, p) => agents.quickAsk(sys, p, getSettings().assistant.backgroundModel.trim()).then(r => r.text),
+    audit
+  })
+  if (toolReply) return { type: 'chat', text: toolReply }
   // Small talk never needs an agent (no tokens, no approval).
   const chat = smallTalk(t)
   if (chat) return { type: 'chat', text: chat }
@@ -940,9 +961,11 @@ function send(e: IslandEvent): void {
 
 let broadcastTimer: NodeJS.Timeout | null = null
 function broadcastSoon(): void {
-  if (broadcastTimer) return
+  // While Isla is shutting down the window and tray are being destroyed — nothing to update any more.
+  if (broadcastTimer || quitting) return
   broadcastTimer = setTimeout(() => {
     broadcastTimer = null
+    if (quitting) return
     const snap = snapshot(false, false)
     send({ type: 'snapshot', snapshot: snap })
     if (sentOutputs.size > 60) for (const id of sentOutputs.keys()) if (!agents.runs.some(r => r.id === id)) sentOutputs.delete(id)
@@ -954,6 +977,10 @@ function broadcastSoon(): void {
 
 // Every new suggestion gets one short peek (with a matching face); after that it lives behind the ✨ button on the pill.
 const peeked = new Set<string>()
+/** After a screen suggestion peeks for an app / site, stay quiet there this long (ignored = not wanted right now). */
+const PEEK_QUIET_MS = 30 * 60_000
+/** "Not now" on a screen suggestion: leave that app / site alone for longer. */
+const DISMISS_QUIET_MS = 2 * 60 * 60_000
 let lastPeekAt = 0
 // A task that waits for approval pops out of the island with Approve / Reject — no need to open the panel.
 const approvalPeeked = new Set<string>()
@@ -982,7 +1009,12 @@ function peekNewSuggestion(sugs: Suggestion[]): void {
     // These already have their own peeks (codes, finished tasks, commit review, approvals) or are superseded by the auto-review.
     if (/^(otp|result|approve|commit):/.test(sug.id) || /^(commit|review):[^:]+:/.test(sug.id)) continue
     if (Date.now() - lastPeekAt < 40_000) continue // don't pester — it stays available behind ✨
+    // Screen suggestions: one peek per app / website, then it goes quiet there for a while. Moving between
+    // pages of the same web system doesn't ask again — whatever it offers stays behind ✨.
+    const fromScreen = !!insight?.suggestions.some(x => x.id === sug.id)
+    if (fromScreen && insight!.isQuiet()) continue
     lastPeekAt = Date.now()
+    if (fromScreen) insight!.quiet(PEEK_QUIET_MS)
     send({ type: 'notify', kind: 'suggest', title: 'Isla suggests', body: sug.title, suggestionId: sug.id, icon: sug.icon })
     return
   }
@@ -1005,7 +1037,6 @@ function killSwitch(reason: string): void {
   const codes = mail.otps.map(o => o.code)
   void clipboard.readText().then(clip => codes.includes(clip) && clipboard.clear())
   mail.wipe()
-  if (predictTimer) clearTimeout(predictTimer)
   security.locked = true
   security.lockedAt = Date.now()
   audit('security.kill-switch', `${reason}; ${killed} running agent(s) terminated`)
@@ -1036,6 +1067,8 @@ function startWatchers(): void {
 }
 
 async function shutdown(): Promise<void> {
+  // Mark it first: from here on no timer may touch the window or tray (they are about to be destroyed).
+  quitting = true
   agents.killAll('shutdown')
   await meetings.stop('Isla shut down')
   meetings.stopWatching()
@@ -1048,7 +1081,6 @@ async function shutdown(): Promise<void> {
   scheduler.stop()
   computer.stopAll()
   audit('app.shutdown', 'User shut down Agentic Island')
-  quitting = true
   app.quit()
 }
 
@@ -1069,31 +1101,6 @@ function handle<A extends unknown[], R>(channel: string, fn: (...args: A) => R |
     if (!trusted(e)) throw new Error('Untrusted sender')
     return fn(...(args as A))
   })
-}
-
-// ---------------------------------------------------------------- proactive predictions
-
-function schedulePrediction(): void {
-  const s = getSettings()
-  if (!s.proactive.enabled || !s.proactive.llmPredictions || security.locked) return
-  if (predictTimer) clearTimeout(predictTimer)
-  // Wait until the working tree has been quiet for 2 minutes, at most once every 20 minutes.
-  predictTimer = setTimeout(() => {
-    if (Date.now() - lastPredictAt < 20 * 60_000) return
-    if (agents.runs.some(r => r.status === 'pending-approval' && r.title === 'Predict next steps')) return
-    void predictNext()
-  }, 2 * 60_000)
-}
-
-async function predictNext(): Promise<void> {
-  const s = getSettings()
-  if (!s.activeWorkspace) throw new Error('Pick a workspace first.')
-  lastPredictAt = Date.now()
-  const stat = await diffSummary(s.activeWorkspace)
-  const commits = (git.state?.commits ?? []).map(c => `${c.hash} ${c.subject} (${c.relative})`).join('\n')
-  // Predictions are always read-only and still need approval before any tokens are spent.
-  agents.request({ title: 'Predict next steps', prompt: PREDICT_PROMPT(stat, commits), mode: 'readonly' }, security.locked)
-  send({ type: 'notify', kind: 'info', title: 'Prediction ready to run', body: 'Approve it to let the agent predict your next steps.' })
 }
 
 function islandUsageRows(): { cost: number; rows: ModelUsage[] } {
@@ -1308,7 +1315,9 @@ function registerIpc(): void {
     await clipboard.writeText(body)
     if (!a?.pid) return { ok: false, message: 'Copied — click into the app and press Ctrl+V.' }
     const pid = Math.floor(Number(a.pid))
-    const ok = await new Promise<boolean>(res =>
+    const ok = winHelper.isNative
+      ? await winHelper.paste(pid)
+      : await new Promise<boolean>(res =>
       execFile(
         'powershell.exe',
         ['-NoProfile', '-NonInteractive', '-Command', `$w = New-Object -ComObject WScript.Shell; if ($w.AppActivate(${pid})) { Start-Sleep -Milliseconds 350; $w.SendKeys('^v'); 'ok' }`],
@@ -1450,10 +1459,10 @@ function registerIpc(): void {
 
   handle('suggestion:dismiss', (id: string) => {
     dismissed.add(String(id))
+    if (insight?.suggestions.some(x => x.id === String(id))) insight.quiet(DISMISS_QUIET_MS)
     broadcastSoon()
   })
 
-  handle('predict', () => predictNext())
   handle('suggestion:do', (id: string, request: unknown) => doSuggestion(String(id), typeof request === 'string' ? request : null))
   handle('git:review', () => (security.locked ? null : insight?.review(true) ?? null))
   handle('git:commit', async (message: string, push: boolean, diffHash: string, allowSecrets?: boolean) => {
@@ -1719,16 +1728,18 @@ async function refreshLimits(): Promise<void> {
 
 let trayKey = ''
 function refreshTray(): void {
-  if (!tray) return
+  if (!tray || tray.isDestroyed() || quitting) return
   const s = getSettings()
+  // Never touch a destroyed window (it throws "Object has been destroyed").
+  const visible = !!win && !win.isDestroyed() && win.isVisible()
   // Rebuilding the menu on every update is wasteful — only when something it shows changed.
-  const key = `${security.locked}|${agents.activeCount}|${win?.isVisible()}|${s.dock.hidden}|${s.launchAtLogin}`
+  const key = `${security.locked}|${agents.activeCount}|${visible}|${s.dock.hidden}|${s.launchAtLogin}`
   if (key === trayKey) return
   trayKey = key
   tray.setToolTip(security.locked ? 'Agentic Island — PAUSED (kill switch)' : `Agentic Island — ${agents.activeCount} agent(s) running`)
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: win?.isVisible() && !s.dock.hidden ? 'Tuck island into edge' : 'Show island', accelerator: TOGGLE_SHORTCUT, click: toggleWindow },
+      { label: visible && !s.dock.hidden ? 'Tuck island into edge' : 'Show island', accelerator: TOGGLE_SHORTCUT, click: toggleWindow },
       meetings.state.phase === 'recording'
         ? { label: '■ Stop recording', click: () => void meetings.stop('Stopped from tray') }
         : { label: '● Record screen', enabled: !security.locked && meetings.state.phase !== 'processing', click: () => void meetings.record() },

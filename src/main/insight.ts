@@ -27,6 +27,36 @@ function sameWindow(a: ActivityContext, b: ActivityContext | null): boolean {
   return !!b && a.pid === b.pid && a.title === b.title
 }
 
+const BROWSER_PROC = /^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen)$/i
+const BROWSER_NAME = /^(google chrome|microsoft edge|mozilla firefox|firefox|brave|opera|vivaldi|arc|zen)$/i
+const PROFILE_NAME = /^(personal|work|guest|profile \d+|default)$/i
+
+/**
+ * The "system" a window belongs to: the app, or for a browser the website ("Orders - Acme Portal - Google Chrome"
+ * → "acme portal"). Moving between pages of the same web system keeps the same key.
+ */
+export function systemOf(a: ActivityContext): string {
+  if (!BROWSER_PROC.test(a.process)) return a.process.toLowerCase()
+  const parts = a.title
+    .split(/ [-—|·] /)
+    .map(p => p.replace(/\s+and \d+ more pages?$/i, '').trim())
+    .filter(p => p && !BROWSER_NAME.test(p) && !PROFILE_NAME.test(p))
+  return `${a.process.toLowerCase()}:${(parts[parts.length - 1] ?? '').toLowerCase()}`
+}
+
+/** Mail folders and overviews — a list of emails, not one email you are reading. */
+const MAIL_LIST_TITLE =
+  /^(inbox|mail|sent( items| mail)?|drafts|spam|junk( email)?|starred|snoozed|important|all mail|archive|deleted items|trash|bin|outbox|search results|scheduled|focused|other|primary|promotions|social|updates|calendar)\b/i
+
+/** One email is really open (its own page or window, with reply/forward and header lines) — not the inbox list. */
+function looksLikeOpenEmail(a: ActivityContext, text: string): boolean {
+  const first = a.title.split(/ [-—|] /)[0]?.trim() ?? ''
+  if (!first || MAIL_LIST_TITLE.test(first)) return false
+  const replyable = /\b(reply all|reply|forward)\b/i.test(text)
+  const headers = /^\s*(from|to|cc|subject|sent)\s*:/im.test(text) || /\bto me\b/i.test(text)
+  return replyable && headers
+}
+
 /** An open conversation: a message box, or several message timestamps. */
 function looksLikeConversation(text: string): boolean {
   if (/(type a (new )?message|write a message|send a message|message @|message #|reply in thread|type your message|write a reply)/i.test(text)) return true
@@ -77,6 +107,8 @@ export class InsightEngine {
   private lastAiHash = ''
   private lastPeek = 0
   private reviewing = false
+  /** App / website → time until which Isla doesn't pop up suggestions (or spend tokens) there. */
+  private quietUntil = new Map<string, number>()
 
   constructor(private d: Deps) {}
 
@@ -110,6 +142,21 @@ export class InsightEngine {
     }
     if (this.nudge) clearTimeout(this.nudge)
     this.nudge = setTimeout(() => void this.tick(), 2500)
+  }
+
+  /** Don't pop up screen suggestions for the app / website in front for a while (it was ignored or dismissed). */
+  quiet(ms: number): void {
+    if (!this.screenApp) return
+    const key = systemOf(this.screenApp)
+    this.quietUntil.set(key, Math.max(this.quietUntil.get(key) ?? 0, Date.now() + ms))
+  }
+
+  /** The app / website in front is in its quiet time. */
+  isQuiet(a: ActivityContext | null = this.screenApp): boolean {
+    if (!a) return false
+    const until = this.quietUntil.get(systemOf(a)) ?? 0
+    if (until && until <= Date.now()) this.quietUntil.delete(systemOf(a))
+    return until > Date.now()
   }
 
   stats(): BackgroundStats {
@@ -205,7 +252,8 @@ export class InsightEngine {
         createdAt: now
       })
     }
-    if (a.kind === 'mail' && text.length > 400) {
+    // Only for one opened email — browsing the inbox list is not a reason to offer a summary.
+    if (a.kind === 'mail' && text.length > 400 && looksLikeOpenEmail(a, text)) {
       out.push({
         id: `mail-screen:${short(text.slice(0, 600))}`,
         title: 'Summarize this email',
@@ -295,10 +343,12 @@ export class InsightEngine {
   private async aiCheck(hash: string, activity: ActivityContext): Promise<void> {
     if (hash !== this.lastHash || hash === this.lastAiHash || this.d.isLocked() || !this.budgetOk()) return
     if (this.screenText.replace(/\s/g, '').length < 80) return
+    // Already asked here and it was ignored — no tokens on new pages of the same app / website.
+    if (this.isQuiet(activity)) return
     this.lastAiHash = hash
     try {
       const reply = await this.cheapAsk(
-        'You are Isla, a proactive desktop assistant. From OCR text of the user screen, propose at most ONE concrete, clearly useful action you (a text AI that cannot click) can do for them now. Reply with compact JSON only: {"title":"max 8 words, imperative","why":"max 15 words","prompt":"full instruction to yourself"} or {"none":true} when nothing is clearly useful. Never suggest actions about passwords or payments.',
+        'You are Isla, a proactive desktop assistant. From OCR text of the user screen, propose at most ONE concrete, clearly useful action you (a text AI that cannot click) can do for them now. Reply with compact JSON only: {"title":"max 8 words, imperative","why":"max 15 words","prompt":"full instruction to yourself"} or {"none":true} when nothing is clearly useful. If the screen is a list or overview (an inbox, search results, a feed, a dashboard, a menu) and no single item is open, reply {"none":true}. Never suggest actions about passwords or payments.',
         `App: ${activity.app} (${activity.kind})\nWindow: ${activity.title}\nScreen text:\n${redactScreen(this.screenText).slice(0, 1500)}`
       )
       const j = parseJson(reply)

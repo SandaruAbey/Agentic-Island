@@ -3,3 +3,4 @@ out/
 release/
 *.log
 build/google-oauth.json
+build/IslaHelper.exe

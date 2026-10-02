@@ -163,11 +163,4 @@ export function buildSuggestions(
   return out.slice(0, 6)
 }
 
-export const PREDICT_PROMPT = (diffStat: string, commits: string) =>
-  `You are a proactive pair-programmer. Based on the repository state below, predict the 3 most likely next tasks the developer will do, most likely first. For each: one line title, one line why, and the exact first step. You may read files and run read-only git commands. Do not edit anything.
 
-Recent commits:
-${commits || '(none)'}
-
-Uncommitted diff stat:
-${diffStat || '(clean working tree)'}`

@@ -269,6 +269,16 @@ function General({ s, snap }: { s: Settings; snap: IslandSnapshot }) {
     <div className="general">
       <div className="row-between">
         <div>
+          <strong>Low-memory mode</strong>
+          <p className="muted small">
+            Draws Isla without the graphics card — uses about half the memory. Turn off only if animations stutter. Takes effect the next time
+            Isla starts.
+          </p>
+        </div>
+        <Toggle label="Low-memory mode" checked={s.lowMemory} onChange={v => void window.island.updateSettings({ lowMemory: v })} />
+      </div>
+      <div className="row-between">
+        <div>
           <strong>Assistant for everyday questions</strong>
           <p className="muted small">
             {snap.assistantProvider
@@ -497,13 +507,6 @@ function General({ s, snap }: { s: Settings; snap: IslandSnapshot }) {
           <p className="muted small">Watch git state and the inbox and suggest the next step.</p>
         </div>
         <Toggle label="Proactive suggestions" checked={s.proactive.enabled} onChange={v => void window.island.updateSettings({ proactive: { enabled: v } })} />
-      </div>
-      <div className="row-between">
-        <div>
-          <strong>AI predictions</strong>
-          <p className="muted small">When your working tree settles, queue a read-only "predict my next steps" task. It waits for your approval, so no tokens are spent until you click.</p>
-        </div>
-        <Toggle label="AI predictions" checked={s.proactive.llmPredictions} onChange={v => void window.island.updateSettings({ proactive: { llmPredictions: v } })} />
       </div>
       <div className="row-between">
         <div>

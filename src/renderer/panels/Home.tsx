@@ -347,21 +347,7 @@ export function HomePanel({
         </>
       )}
 
-      <div className="row-between">
-        <h3 className="label">Up next</h3>
-        <button
-          className="link"
-          disabled={locked || !s.activeWorkspace}
-          onClick={() =>
-            void window.island
-              .predictNext()
-              .then(() => open('agent'))
-              .catch(e => setInfo(cleanErr(e)))
-          }
-        >
-          <Icon name="spark" size={13} /> Predict my next steps
-        </button>
-      </div>
+      <h3 className="label">Up next</h3>
       {snap.suggestions.length === 0 ? (
         <div className="empty">
           {locked

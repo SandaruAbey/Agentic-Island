@@ -200,6 +200,8 @@ export interface MeetingRecord {
 }
 
 export interface Settings {
+  /** Software rendering (no GPU process) — about half the memory. Applied at the next start. */
+  lowMemory: boolean
   meetings: MeetingSettings
   /** Your own Google Cloud "Desktop app" OAuth client (only needed if the build doesn't bundle one). */
   google: { clientId: string; clientSecret: string }
@@ -224,8 +226,6 @@ export interface Settings {
   mail: MailConfig
   proactive: {
     enabled: boolean
-    /** Let the agent itself predict next steps (costs tokens, read-only). */
-    llmPredictions: boolean
   }
   launchAtLogin: boolean
   /** Per-app screen reading permissions. Apps not listed follow the default (allowed). */
@@ -730,7 +730,6 @@ export interface IslandApi {
   copyOtp(id: string): Promise<boolean>
   dismissOtp(id: string): Promise<void>
   dismissSuggestion(id: string): Promise<void>
-  predictNext(): Promise<void>
   getUsage(): Promise<UsageReport>
   getProcesses(): Promise<AiProcess[]>
   getAudit(): Promise<AuditEntry[]>

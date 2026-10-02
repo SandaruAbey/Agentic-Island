@@ -69,7 +69,7 @@ Password managers, banking and private/incognito windows are **never read**. Scr
   2. has a cheap model write a **commit message** and flag real problems (bugs, leftover debug code, TODOs),
   3. pops up **Commit & push** if everything looks good, or **Check before committing** with the issues listed.
 - A commit is **refused if files changed after the review**, and **blocked if a secret is found** (overriding needs a confirmation and is logged).
-- Other suggestions: pull when you're behind, push when you're ahead, explain merge conflicts, *Predict my next steps*.
+- Other suggestions: pull when you're behind, push when you're ahead, explain merge conflicts.
 
 ### ✉️ Mail: right in your browser, with no setup
 There's no inbox to connect and no Google sign-in. Isla works with the mail you already have open in the browser (Gmail, Outlook…):
@@ -158,7 +158,7 @@ Anything in the Windows media flyout works: **YouTube in Chrome/Edge/Firefox, Sp
 | Skip approval for simple General questions | Off | Lets suggested read-only questions skip the card |
 | Ask permission for web operations | On | Always shows approval card before web access |
 | App permissions | All allowed | Control which apps Isla can screen-read |
-| Proactive suggestions / AI predictions | On / Off | Git suggestions / queued "predict next steps" |
+| Proactive suggestions | On / Off | Git, screen and inbox suggestions |
 
 ---
 

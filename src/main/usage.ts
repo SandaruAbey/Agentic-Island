@@ -1,3 +1,4 @@
+import { winHelper } from './winhelper'
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { homedir, cpus } from 'node:os'
@@ -419,10 +420,17 @@ let prevAt = 0
 
 export function listAiProcesses(): Promise<AiProcess[]> {
   return new Promise(res => {
-    execFile(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', PS_SCRIPT],
-      { windowsHide: true, timeout: 15_000, maxBuffer: 16 * 1024 * 1024 },
+    // Native helper: no PowerShell started every few seconds while the Usage tab is open.
+    const query = (cb: (err: Error | null, out: string) => void) =>
+      winHelper.isNative
+        ? winHelper.procs().then(out => cb(null, out), e => cb(e as Error, ''))
+        : execFile(
+            'powershell.exe',
+            ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', PS_SCRIPT],
+            { windowsHide: true, timeout: 15_000, maxBuffer: 16 * 1024 * 1024 },
+            (err, out) => cb(err, out)
+          )
+    query(
       (err, out) => {
         if (err || !out.trim()) return res([])
         let list: any[]

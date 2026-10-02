@@ -241,6 +241,7 @@ export class Desktop {
   private proc: ChildProcess | null = null
   private chain: Promise<unknown> = Promise.resolve()
   private waiting: ((line: string) => void) | null = null
+  private idle: NodeJS.Timeout | null = null
 
   windows = async (): Promise<DeskWindow[]> => asArray<DeskWindow>(await this.call('windows', {}))
   read = async (hwnd: number): Promise<DeskElement[]> => asArray<DeskElement>(await this.call('read', { hwnd }, 30_000))
@@ -262,6 +263,12 @@ export class Desktop {
   }
 
   private call(op: string, args: unknown, timeoutMs = 20_000): Promise<unknown> {
+    // Free its ~80 MB when PC control hasn't been used for 2 minutes; the next action starts it again.
+    if (this.idle) clearTimeout(this.idle)
+    this.idle = setTimeout(() => {
+      this.idle = null
+      if (!this.waiting) this.stop()
+    }, 120_000)
     const run = async () => {
       const p = this.ensure()
       const line = await new Promise<string>((res, rej) => {

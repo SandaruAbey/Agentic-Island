@@ -68,7 +68,6 @@ const api: IslandApi = {
   copyOtp: id => invoke('otp:copy', id),
   dismissOtp: id => invoke('otp:dismiss', id),
   dismissSuggestion: id => invoke('suggestion:dismiss', id),
-  predictNext: () => invoke('predict'),
   getUsage: () => invoke('usage'),
   getProcesses: () => invoke('processes'),
   getAudit: () => invoke('audit'),

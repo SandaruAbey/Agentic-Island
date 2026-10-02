@@ -1,5 +1,16 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { killTree } from './agents'
+
+/**
+ * Prefer the native helper (build/IslaHelper.exe, ~20 MB RAM) — same protocol as the PowerShell script below,
+ * which stays as an automatic fallback if the exe is missing.
+ */
+function nativeHelper(): string | null {
+  const candidates = [join(process.resourcesPath ?? '', 'IslaHelper.exe'), resolve(__dirname, '../../build/IslaHelper.exe')]
+  return candidates.find(p => p && existsSync(p)) ?? null
+}
 
 /**
  * One long-lived PowerShell process shared by the foreground-window watcher, the media controls and the on-device OCR.
@@ -210,17 +221,56 @@ while ($true) {
 }
 `
 
-type Feature = 'fg' | 'media' | 'ocr' | 'bt'
+type Feature = 'fg' | 'media' | 'ocr' | 'bt' | 'mic'
 
 class WinHelper {
   onForeground: (line: string) => void = () => {}
   onRect: (rect: string) => void = () => {}
   onMedia: (json: string) => void = () => {}
   onBluetooth: (json: string) => void = () => {}
+  /** Apps using the microphone right now ("C:" lines, native helper only). */
+  onMic: (users: string[]) => void = () => {}
   private proc: ChildProcess | null = null
   private features = new Set<Feature>()
   private restart: NodeJS.Timeout | null = null
   private ocrQueue: ((line: string) => void)[] = []
+  private procsQueue: ((line: string) => void)[] = []
+  private pasteQueue: ((line: string) => void)[] = []
+  private native = false
+  private idleKill: NodeJS.Timeout | null = null
+
+  /** True when the native helper is available (mic / procs / paste then run inside it, not in extra PowerShells). */
+  get isNative(): boolean {
+    return nativeHelper() !== null
+  }
+
+  /** One-shot request to the native helper; it is started for it and stopped again a minute later if nothing else needs it. */
+  private request(cmd: string, queue: ((line: string) => void)[], timeoutMs: number): Promise<string> {
+    if (!this.proc) this.spawn()
+    if (this.idleKill) clearTimeout(this.idleKill)
+    this.idleKill = setTimeout(() => {
+      this.idleKill = null
+      if (!this.features.size) this.kill()
+    }, 60_000)
+    return new Promise((res, rej) => {
+      const t = setTimeout(() => rej(new Error('Helper timed out')), timeoutMs)
+      queue.push(line => {
+        clearTimeout(t)
+        res(line)
+      })
+      this.write(cmd)
+    })
+  }
+
+  /** AI-related processes as JSON (same shape the Usage tab's PowerShell query returned). */
+  procs(): Promise<string> {
+    return this.request('procs', this.procsQueue, 15_000)
+  }
+
+  /** Bring the app with this pid to the front and press Ctrl+V. Never presses Enter. */
+  async paste(pid: number): Promise<boolean> {
+    return (await this.request(`paste ${Math.floor(pid)}`, this.pasteQueue, 8000).catch(() => 'fail')) === 'ok'
+  }
 
   enable(f: Feature): void {
     if (this.features.has(f)) return
@@ -231,7 +281,7 @@ class WinHelper {
 
   disable(f: Feature): void {
     if (!this.features.delete(f)) return
-    if (!this.features.size) this.kill()
+    if (!this.features.size && !this.idleKill) this.kill()
     else this.toggle(f, false)
   }
 
@@ -255,6 +305,7 @@ class WinHelper {
   }
 
   private toggle(f: Feature, on: boolean): void {
+    if (f === 'mic' && !this.native) return
     if (f === 'ocr') {
       if (!on) this.write('ocr 0')
     } else this.write(`${f} ${on ? 1 : 0}`)
@@ -268,10 +319,13 @@ class WinHelper {
   private spawn(): void {
     if (this.restart) clearTimeout(this.restart)
     this.restart = null
-    const encoded = Buffer.from(SCRIPT, 'utf16le').toString('base64')
-    const p = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], {
-      windowsHide: true
-    })
+    const exe = nativeHelper()
+    this.native = !!exe
+    const p = exe
+      ? spawn(exe, [], { windowsHide: true })
+      : spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(SCRIPT, 'utf16le').toString('base64')], {
+          windowsHide: true
+        })
     this.proc = p
     p.stdin.on('error', () => {
       /* process went away — 'close' handles it */
@@ -289,6 +343,9 @@ class WinHelper {
         else if (line.startsWith('M:')) this.onMedia(line.slice(2))
         else if (line.startsWith('B:')) this.onBluetooth(line.slice(2))
         else if (line.startsWith('O:')) this.ocrQueue.shift()?.(line.slice(2))
+        else if (line.startsWith('C:')) this.onMic(line.slice(2).split('|').filter(Boolean))
+        else if (line.startsWith('P:')) this.procsQueue.shift()?.(line.slice(2))
+        else if (line.startsWith('V:')) this.pasteQueue.shift()?.(line.slice(2))
       }
     })
     p.on('close', () => {
@@ -311,6 +368,8 @@ class WinHelper {
 
   private flushOcr(reason: string): void {
     for (const q of this.ocrQueue.splice(0)) q(`ERR:${reason}`)
+    for (const q of this.procsQueue.splice(0)) q('[]')
+    for (const q of this.pasteQueue.splice(0)) q('fail')
   }
 }
 

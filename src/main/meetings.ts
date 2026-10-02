@@ -1,3 +1,4 @@
+import { remuxFragmentedMp4 } from './remux'
 import { app, BrowserWindow, desktopCapturer, ipcMain, screen as eScreen, shell } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync, type WriteStream } from 'node:fs'
@@ -5,6 +6,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { IslandEvent, MeetingRecord, MeetingSettings, MeetingState, RecordOptions, ScreenSource } from '@shared/types'
 import { killTree } from './agents'
+import { winHelper } from './winhelper'
 
 /**
  * Meetings: notice a call (an app starts using the microphone), offer to record, record screen + audio
@@ -158,6 +160,7 @@ export class MeetingManager {
   state: MeetingState = { phase: 'idle', app: '', detectedAt: null, recordingSince: null, step: null }
   list: MeetingRecord[] = []
   private mic: ChildProcess | null = null
+  private micNative = false
   private micUsers: string[] = []
   private idleTimer: NodeJS.Timeout | null = null
   private recorder: BrowserWindow | null = null
@@ -262,7 +265,13 @@ export class MeetingManager {
   // ---- detection
 
   start(): void {
-    if (this.mic) return
+    if (this.mic || this.micNative) return
+    if (winHelper.isNative) {
+      this.micNative = true
+      winHelper.onMic = users => this.onMic(users)
+      winHelper.enable('mic')
+      return
+    }
     const p = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(MIC_SCRIPT, 'utf16le').toString('base64')], { windowsHide: true })
     this.mic = p
     let buf = ''
@@ -279,6 +288,10 @@ export class MeetingManager {
   }
 
   stopWatching(): void {
+    if (this.micNative) {
+      this.micNative = false
+      winHelper.disable('mic')
+    }
     const p = this.mic
     this.mic = null
     if (p) killTree(p.pid)
@@ -413,6 +426,8 @@ export class MeetingManager {
     writeSync(cur.wav.fd, wavHeader(cur.wav.bytes), 0, 44, 0)
     closeSync(cur.wav.fd)
     await new Promise<void>(res => (cur.video ? cur.video.end(() => res()) : res()))
+    // MediaRecorder's fragmented MP4 can't be seeked — rewrite it as a normal MP4 (no re-encoding).
+    if (cur.rec.videoFile?.endsWith('.mp4')) remuxFragmentedMp4(cur.rec.videoFile)
     const rec = cur.rec
     rec.endedAt = Date.now()
     this.list.unshift(rec)
@@ -536,6 +551,8 @@ export class MeetingManager {
   play(id: string): void {
     const m = this.list.find(x => x.id === id)
     const f = m?.videoFile && existsSync(m.videoFile) ? m.videoFile : m ? join(m.folder, 'audio.wav') : null
+    // Recordings made before the seek fix are made seekable the first time they're played (no-op if already fine).
+    if (f?.endsWith('.mp4') && existsSync(f)) remuxFragmentedMp4(f)
     if (f && existsSync(f)) void shell.openPath(f)
   }
 

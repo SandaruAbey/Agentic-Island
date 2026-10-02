@@ -9,6 +9,7 @@ const secretsFile = () => join(dir(), 'secrets.bin')
 const auditFile = () => join(dir(), 'audit.log')
 
 export const defaultSettings: Settings = {
+  lowMemory: true,
   meetings: {
     autoDetect: true,
     recordScreen: true,
@@ -47,7 +48,7 @@ export const defaultSettings: Settings = {
     hasPassword: false,
     clipboardClearSeconds: 45
   },
-  proactive: { enabled: true, llmPredictions: false },
+  proactive: { enabled: true },
   launchAtLogin: false,
   appPermissions: [],
   computer: { enabled: true, realInput: true },
