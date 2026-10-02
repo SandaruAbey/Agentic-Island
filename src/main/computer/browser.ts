@@ -1,4 +1,4 @@
-import { app, BrowserWindow, session } from 'electron'
+import { app, BrowserWindow, session, WebContentsView, type WebContents } from 'electron'
 
 /**
  * Isla's own browser for computer-use tasks: a separate Chromium window with its own saved profile
@@ -69,8 +69,67 @@ export interface ElementInfo {
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
+/** Height of the toolbar strip (back · forward · reload · address bar · home). */
+const BAR = 46
+const HOME = 'https://www.google.com'
+
+/**
+ * The toolbar is a tiny local page. It never gets Node or an IPC bridge: it asks for things by "navigating" to
+ * isla-ui://<action>?u=…, which the main process intercepts (and cancels). The main process pushes state back in.
+ */
+const TOOLBAR_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
+  * { box-sizing: border-box; margin: 0; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; }
+  html, body { height: 100%; background: #1c1c1e; color: #f5f5f7; overflow: hidden; user-select: none; }
+  body { display: flex; align-items: center; gap: 4px; padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,.08); }
+  button { width: 32px; height: 32px; flex: none; border: 0; border-radius: 8px; background: transparent; color: #e5e5ea; cursor: pointer;
+    display: grid; place-items: center; }
+  button:hover:not(:disabled) { background: rgba(255,255,255,.08); }
+  button:disabled { color: #48484a; cursor: default; }
+  svg { width: 18px; height: 18px; fill: currentColor; }
+  form { flex: 1; display: flex; min-width: 0; }
+  input { flex: 1; min-width: 0; height: 32px; padding: 0 14px; border-radius: 999px; border: 1px solid transparent; background: #2c2c2e;
+    color: #f5f5f7; font-size: 13.5px; outline: none; }
+  input:focus { border-color: #0a84ff; background: #1c1c1e; }
+  .lock { position: absolute; }
+  #load { position: fixed; left: 0; bottom: 0; height: 2px; width: 0; background: #0a84ff; transition: width .4s ease, opacity .3s; opacity: 0; }
+  #load.on { width: 70%; opacity: 1; }
+</style></head><body>
+  <button id="back" title="Back (Alt+Left)" disabled><svg viewBox="0 0 24 24"><path d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z"/></svg></button>
+  <button id="fwd" title="Forward (Alt+Right)" disabled><svg viewBox="0 0 24 24"><path d="M4 11h12.2l-5.6-5.6L12 4l8 8-8 8-1.4-1.4 5.6-5.6H4z"/></svg></button>
+  <button id="reload" title="Reload (F5)"><svg viewBox="0 0 24 24"><path d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h7V4z"/></svg></button>
+  <form id="f"><input id="url" spellcheck="false" placeholder="Search Google or type a web address" /></form>
+  <button id="home" title="Home"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg></button>
+  <div id="load"></div>
+<script>
+  const $ = id => document.getElementById(id)
+  const ask = (action, u) => { location.href = 'isla-ui://' + action + (u !== undefined ? '?u=' + encodeURIComponent(u) : '') }
+  $('back').onclick = () => ask('back')
+  $('fwd').onclick = () => ask('forward')
+  $('reload').onclick = () => ask('reload')
+  $('home').onclick = () => ask('go', '${HOME}')
+  $('f').onsubmit = e => { e.preventDefault(); const v = $('url').value.trim(); if (v) { ask('go', v); $('url').blur() } }
+  $('url').onfocus = () => setTimeout(() => $('url').select(), 0)
+  window.islaUpdate = s => {
+    $('back').disabled = !s.back
+    $('fwd').disabled = !s.fwd
+    if (document.activeElement !== $('url')) $('url').value = s.url || ''
+    $('load').className = s.loading ? 'on' : ''
+  }
+  window.islaFocus = () => { $('url').focus() }
+</script></body></html>`
+
+/** Address-bar text → a URL: a web address as typed, anything else becomes a Google search. */
+function toUrl(input: string): string {
+  const v = input.trim()
+  if (/^https?:\/\//i.test(v)) return v
+  if (!/\s/.test(v) && /^[\w-]+(\.[\w-]+)+(:\d+)?(\/.*)?$/i.test(v)) return `https://${v}`
+  return `https://www.google.com/search?q=${encodeURIComponent(v)}`
+}
+
 export class IslaBrowser {
   private win: BrowserWindow | null = null
+  /** The web page itself (under the toolbar) — everything the AI reads and clicks is in here. */
+  private page: WebContentsView | null = null
   /** webContents ids that may navigate freely (the app's own window may not). */
   readonly contentIds = new Set<number>()
 
@@ -80,11 +139,11 @@ export class IslaBrowser {
   ) {}
 
   get open(): boolean {
-    return !!this.win && !this.win.isDestroyed()
+    return !!this.win && !this.win.isDestroyed() && !!this.page
   }
 
-  private ensure(): BrowserWindow {
-    if (this.win && !this.win.isDestroyed()) return this.win
+  private ensure(): WebContents {
+    if (this.open) return this.page!.webContents
     const ses = session.fromPartition(PARTITION)
     // Look like plain Chrome — some sites (Google sign-in) refuse "Electron".
     ses.setUserAgent(app.userAgentFallback.replace(/\s(Electron|agentic-island|Agentic Island)\/\S+/gi, ''))
@@ -92,6 +151,7 @@ export class IslaBrowser {
     ses.setPermissionCheckHandler(() => false)
     // Never drop files on the PC from an automated task.
     ses.on('will-download', e => e.preventDefault())
+
     const win = new BrowserWindow({
       width: 1280,
       height: 860,
@@ -99,6 +159,10 @@ export class IslaBrowser {
       title: 'Isla browser',
       icon: this.icon,
       autoHideMenuBar: true,
+      backgroundColor: '#1c1c1e',
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, spellcheck: false }
+    })
+    const page = new WebContentsView({
       webPreferences: {
         partition: PARTITION,
         sandbox: true,
@@ -109,24 +173,90 @@ export class IslaBrowser {
         spellcheck: false
       }
     })
-    this.contentIds.add(win.webContents.id)
-    const id = win.webContents.id
-    // Pop-ups open in the same window.
-    win.webContents.setWindowOpenHandler(({ url }) => {
-      if (/^https?:/i.test(url)) void win.loadURL(url)
+    win.contentView.addChildView(page)
+    const layout = () => {
+      const [w, h] = win.getContentSize()
+      page.setBounds({ x: 0, y: BAR, width: w, height: Math.max(0, h - BAR) })
+    }
+    layout()
+    win.on('resize', layout)
+
+    const wc = page.webContents
+    const bar = win.webContents
+    void bar.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(TOOLBAR_HTML)}`)
+
+    // Toolbar → main: "navigations" to isla-ui://… are requests, never real navigations.
+    bar.on('will-navigate', (e, url) => {
+      e.preventDefault()
+      if (!url.startsWith('isla-ui://')) return
+      const u = new URL(url)
+      const action = u.hostname
+      if (action === 'back' && wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack()
+      else if (action === 'forward' && wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward()
+      else if (action === 'reload') wc.reload()
+      else if (action === 'go') {
+        const target = toUrl(u.searchParams.get('u') ?? '')
+        if (/^https?:/i.test(target)) void wc.loadURL(target).catch(() => {})
+        wc.focus()
+      }
+    })
+    bar.setWindowOpenHandler(() => ({ action: 'deny' }))
+
+    // Main → toolbar: address, back/forward and loading state.
+    const sync = () => {
+      if (bar.isDestroyed() || wc.isDestroyed()) return
+      const state = { url: wc.getURL(), back: wc.navigationHistory.canGoBack(), fwd: wc.navigationHistory.canGoForward(), loading: wc.isLoading() }
+      void bar.executeJavaScript(`window.islaUpdate && window.islaUpdate(${JSON.stringify(state)})`).catch(() => {})
+      win.setTitle(wc.getTitle() ? `${wc.getTitle()} — Isla browser` : 'Isla browser')
+    }
+    for (const ev of ['did-navigate', 'did-navigate-in-page', 'did-start-loading', 'did-stop-loading', 'page-title-updated'] as const) {
+      wc.on(ev as 'did-stop-loading', sync)
+    }
+    bar.on('did-finish-load', sync)
+
+    // Usual browser keys in the page: Ctrl+L / Alt+D address bar, Alt+←/→, F5 / Ctrl+R.
+    wc.on('before-input-event', (e, input) => {
+      if (input.type !== 'keyDown') return
+      const k = input.key.toLowerCase()
+      if ((input.control && k === 'l') || (input.alt && k === 'd')) {
+        e.preventDefault()
+        bar.focus()
+        void bar.executeJavaScript('window.islaFocus && window.islaFocus()').catch(() => {})
+      } else if (input.alt && k === 'arrowleft' && wc.navigationHistory.canGoBack()) {
+        e.preventDefault()
+        wc.navigationHistory.goBack()
+      } else if (input.alt && k === 'arrowright' && wc.navigationHistory.canGoForward()) {
+        e.preventDefault()
+        wc.navigationHistory.goForward()
+      } else if (k === 'f5' || (input.control && k === 'r')) {
+        e.preventDefault()
+        wc.reload()
+      }
+    })
+
+    this.contentIds.add(wc.id)
+    const id = wc.id
+    // Pop-ups open in the same view.
+    wc.setWindowOpenHandler(({ url }) => {
+      if (/^https?:/i.test(url)) void wc.loadURL(url).catch(() => {})
       return { action: 'deny' }
     })
-    win.webContents.on('will-navigate', (e, url) => {
+    wc.on('will-navigate', (e, url) => {
       if (!/^https?:/i.test(url)) e.preventDefault()
     })
     win.on('closed', () => {
       this.contentIds.delete(id)
-      if (this.win === win) this.win = null
+      if (!wc.isDestroyed()) wc.close()
+      if (this.win === win) {
+        this.win = null
+        this.page = null
+      }
       this.onChange()
     })
     this.win = win
+    this.page = page
     this.onChange()
-    return win
+    return wc
   }
 
   /** Show the window (for watching, or signing in) or tuck it away again. */
@@ -135,10 +265,10 @@ export class IslaBrowser {
       if (this.open) this.win!.hide()
       return
     }
-    const w = this.ensure()
-    if (w.webContents.getURL() === '') void w.loadURL('https://www.google.com')
-    if (focus) w.show()
-    else w.showInactive()
+    const wc = this.ensure()
+    if (wc.getURL() === '') void wc.loadURL(HOME).catch(() => {})
+    if (focus) this.win!.show()
+    else this.win!.showInactive()
   }
 
   async goto(url: string): Promise<void> {
@@ -149,9 +279,9 @@ export class IslaBrowser {
       throw new Error('That is not a valid web address.')
     }
     if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('Only http(s) pages can be opened.')
-    const w = this.ensure()
+    const wc = this.ensure()
     try {
-      await w.loadURL(u.toString())
+      await wc.loadURL(u.toString())
     } catch {
       // Redirects/aborted sub-loads reject loadURL even though the page is usable.
     }
@@ -159,44 +289,43 @@ export class IslaBrowser {
   }
 
   async back(): Promise<void> {
-    const w = this.ensure()
-    if (w.webContents.navigationHistory.canGoBack()) w.webContents.navigationHistory.goBack()
+    const wc = this.ensure()
+    if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack()
     await this.settle()
   }
 
   url(): string {
-    return this.open ? this.win!.webContents.getURL() : ''
+    return this.open ? this.page!.webContents.getURL() : ''
   }
 
   title(): string {
-    return this.open ? this.win!.webContents.getTitle() : ''
+    return this.open ? this.page!.webContents.getTitle() : ''
   }
 
   async read(): Promise<{ url: string; title: string; text: string; elements: string[] }> {
-    const w = this.need()
-    return w.webContents.executeJavaScript(READ_PAGE, true)
+    return this.need().executeJavaScript(READ_PAGE, true)
   }
 
   async describe(ref: string): Promise<ElementInfo | null> {
     if (!/^\d{1,4}$/.test(ref)) throw new Error('Use an element number from browser_read.')
-    return this.need().webContents.executeJavaScript(DESCRIBE(ref), true)
+    return this.need().executeJavaScript(DESCRIBE(ref), true)
   }
 
-  /** A real (trusted) click inside Isla's window only — your own mouse is not touched. */
+  /** A click inside Isla's browser only — your own mouse is not touched. */
   async click(ref: string): Promise<void> {
-    const w = this.need()
+    const wc = this.need()
     const el = await this.describe(ref)
     if (!el) throw new Error(`Element ${ref} is gone — call browser_read again.`)
-    if (w.isVisible() && el.w >= 1 && el.h >= 1) {
-      // Visible: a real (trusted) click inside Isla's window.
+    if (this.win!.isVisible() && el.w >= 1 && el.h >= 1) {
+      // Visible: a real (trusted) click inside Isla's page view.
       const { x, y } = el
-      w.webContents.sendInputEvent({ type: 'mouseMove', x, y })
-      w.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
-      w.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
+      wc.sendInputEvent({ type: 'mouseMove', x, y })
+      wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
+      wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
     } else {
       // Hidden windows don't hit-test real input: replay the whole pointer/mouse sequence a click produces on the element
       // (Gmail and other web apps listen for mousedown/mouseup, not just click).
-      await w.webContents.executeJavaScript(
+      await wc.executeJavaScript(
         `(() => {
           const el = document.querySelector('[data-isla-ref="${ref}"]')
           if (!el) return false
@@ -216,8 +345,8 @@ export class IslaBrowser {
 
   async type(ref: string, text: string, submit: boolean): Promise<void> {
     if (!/^\d{1,4}$/.test(ref)) throw new Error('Use an element number from browser_read.')
-    const w = this.need()
-    const ok = await w.webContents.executeJavaScript(
+    const wc = this.need()
+    const ok = await wc.executeJavaScript(
       `(() => {
         const el = document.querySelector('[data-isla-ref="${ref}"]')
         if (!el) return false
@@ -231,22 +360,22 @@ export class IslaBrowser {
     )
     if (!ok) throw new Error(`Element ${ref} is gone — call browser_read again.`)
     // insertText fires real input events, so React/Gmail-style editors pick it up.
-    await w.webContents.insertText(text)
+    await wc.insertText(text)
     if (submit) {
-      w.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' })
-      w.webContents.sendInputEvent({ type: 'char', keyCode: '\r' })
-      w.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' })
+      wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' })
+      wc.sendInputEvent({ type: 'char', keyCode: '\r' })
+      wc.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' })
       await this.settle()
     }
   }
 
   async scroll(direction: 'up' | 'down'): Promise<void> {
-    await this.need().webContents.executeJavaScript(`window.scrollBy(0, ${direction === 'up' ? -1 : 1} * window.innerHeight * 0.85)`, true)
+    await this.need().executeJavaScript(`window.scrollBy(0, ${direction === 'up' ? -1 : 1} * window.innerHeight * 0.85)`, true)
     await sleep(300)
   }
 
   async screenshot(): Promise<{ png: string; width: number; height: number }> {
-    const img = await this.need().webContents.capturePage(undefined, { stayHidden: true })
+    const img = await this.need().capturePage(undefined, { stayHidden: true })
     const small = img.getSize().width > 1280 ? img.resize({ width: 1280 }) : img
     const { width, height } = small.getSize()
     return { png: small.toPNG().toString('base64'), width, height }
@@ -255,16 +384,17 @@ export class IslaBrowser {
   close(): void {
     if (this.open) this.win!.destroy()
     this.win = null
+    this.page = null
   }
 
-  private need(): BrowserWindow {
-    if (!this.open || this.win!.webContents.getURL() === '') throw new Error('No page is open — call browser_open first.')
-    return this.win!
+  private need(): WebContents {
+    if (!this.open || this.page!.webContents.getURL() === '') throw new Error('No page is open — call browser_open first.')
+    return this.page!.webContents
   }
 
   /** Wait for the page to finish loading (and a beat for scripts to render). */
   private async settle(): Promise<void> {
-    const wc = this.win?.webContents
+    const wc = this.page?.webContents
     if (!wc) return
     const t0 = Date.now()
     await sleep(250)
