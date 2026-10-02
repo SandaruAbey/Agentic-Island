@@ -11,6 +11,7 @@ A macOS-style **Dynamic Island for Windows** with a proactive AI assistant insid
 - **Drag it to any edge:** top, bottom, left or right. If you let go away from an edge, it **glides to the nearest edge** with a bouncy, macOS-style landing. On the left and right edges it becomes a vertical pill. The position is remembered.
 - **Tuck it away:** the small arrow at the end of the pill (or in the panel header) hides Isla into a tiny arrow tab on the edge. Click the tab to bring it back.
 - **Peeks:** when something happens (a code arrives, a task finishes, a suggestion is ready, your changes are ready to commit), the island briefly grows with a one-click button, then folds back after a few seconds. Isla's face matches the moment: happy for mail, surprised for errors, thinking for ideas.
+- **Approvals pop out:** a task waiting for your OK appears right in the island with **[Approve] [Reject]** (👁 shows exactly what will be sent). If you miss it, the orange **Review** button on the pill brings it back.
 - **✨ chip:** suggestions you didn't act on stay behind a small ✨ button on the pill. Click it to bring them back one by one.
 - **Isla's face** reacts to everything: she sleeps when you're away, works while an agent runs, looks suspicious while a task waits for approval, gets excited when a code arrives, and **dances when music plays** 🎉.
 
@@ -70,17 +71,29 @@ Password managers, banking and private/incognito windows are **never read**. Scr
 - A commit is **refused if files changed after the review**, and **blocked if a secret is found** (overriding needs a confirmation and is logged).
 - Other suggestions: pull when you're behind, push when you're ahead, explain merge conflicts, *Predict my next steps*.
 
-### ✉️ Mail and verification codes (optional)
-Connect your inbox once:
-- **Gmail: `Sign in with Google`.** One click opens Google's own sign-in page in your browser. Isla never sees your password and only gets **read-only** Gmail access (`gmail.readonly`). The key is stored encrypted, and **Sign out** revokes it.
-- **Other email** (Yahoo, iCloud, work mail): type your address and the server fills in automatically. A button opens the right *app password* page.
-- **No setup at all:** open your mail in the browser, and Isla reads the screen and offers *Summarize this email* / *Draft a reply*.
+### ✉️ Mail: right in your browser, with no setup
+There's no inbox to connect and no Google sign-in. Isla works with the mail you already have open in the browser (Gmail, Outlook…):
+- With an email on screen, Isla offers **Summarize this email** and **Draft a reply**. You can also type "summarize this email" or "draft a reply to this".
+- The reply gets **Copy** and **Paste into Gmail/Outlook**: Isla pastes it into the reply box, and you press Send.
+- When PC control is on, mail questions can also run in Isla's own browser with Gmail. You sign in there yourself the first time.
 
-Then:
-- **Verification codes** are detected the moment they arrive: the island pops out with the code and a **Copy** button. The clipboard wipes itself after 45 s. Promo and coupon codes are ignored.
-- **Mail tab:** inbox list, a reader, **Summarize**, **Draft reply** and **Summarize inbox**.
-- **New-mail peeks** with a **Read** button.
-- Nothing is ever sent, deleted or marked as read.
+### 🎬 Screen recordings and meetings (summaries in Sinhala, Tamil, English…)
+- **Record your screen any time:** **Recordings** tab → *Record…* opens a picker:
+  - **Screens:** tick one or several. Several screens are recorded side by side in one video. With no screen ticked, it records sound only.
+  - **Computer sound:** what you hear (people in a call, videos).
+  - **Microphone:** your voice.
+
+  You get a normal **MP4** (H.264 + AAC, 30 fps). Your choice is remembered and used for the tray menu → *● Record screen*, for typing "record screen", and for the meeting **Record** button. Plain screen recordings are *not* summarized; click **Transcribe & summarize** if you want that.
+- **Isla stays out of the video:** while recording, Isla's own window is excluded from capture. You still see it on your screen, but it never appears in the recording.
+- **Notices the meeting:** when Teams, Zoom, Webex, Slack, WhatsApp, Discord or a browser call (Google Meet) starts using your microphone, Isla pops up: *"Meeting started in Teams — record & summarize?"* **[Record] [Not now]**. Nothing is recorded without your click.
+- **Meetings:** a recording made while a call app is using the mic counts as a meeting. Isla records the screen (MP4) plus one clean audio track with **your microphone and everyone else's voices** (Windows system audio). A red **● REC 12:34** chip with a stop button stays on the pill the whole time. Please let participants know you're recording.
+- **When the call ends** (the app releases the mic), recording stops automatically, or you can click Stop. Isla then uses **Google Gemini** to make:
+  - a **summary**, the **decisions** and the **action items** (owner and due date), in English or in the meeting's own language,
+  - a full **transcript in the original language(s)**: Sinhala in Sinhala script, Tamil in Tamil script, English, or mixed.
+- Everything is saved in **`Videos\Agentic Island\Meetings\<date> <app>\`**: `recording.mp4`, `audio.wav`, `transcript.txt` and `summary.md`. The **Recordings** tab lists them, with Play video, Show in folder, Copy summary, Transcribe & summarize and Delete.
+- Type **"record this meeting"** / **"stop recording"** in the island any time.
+- **Setup:** paste a **free Gemini API key** from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) in the Meetings tab. It's stored encrypted. Without a key, meetings are still recorded; click *Summarize* later.
+- **Privacy:** the audio is uploaded to Gemini only to transcribe and summarize, and the uploaded copy is **deleted from Google right after**. The kill switch stops a recording at once and keeps the files local (no upload).
 
 ### 🎵 Now playing
 Anything in the Windows media flyout works: **YouTube in Chrome/Edge/Firefox, Spotify, Media Player, VLC…**
@@ -116,15 +129,6 @@ Anything in the Windows media flyout works: **YouTube in Chrome/Edge/Firefox, Sp
    - Claude Code not signed in? Run `claude` in a terminal and use `/login`.
    - Gemini CLI not signed in? Run `gemini` once and choose *Login with Google*.
 2. **Settings → Workspaces → Add folder:** allow your project folders. Agents and git actions only ever run inside these.
-3. *(Optional)* **Settings → Inbox → Sign in with Google** for Gmail, or **Other email** for any IMAP account.
-
-### One-time: enable "Sign in with Google" (for whoever builds Isla)
-Google requires every app that reads Gmail to be registered once. Users never see this step if you bundle the client.
-1. [Google Cloud Console](https://console.cloud.google.com/apis/library/gmail.googleapis.com): create a project and **enable the Gmail API**.
-2. **OAuth consent screen:** *External*, app name "Agentic Island", scope `gmail.readonly`, and add yourself as a **test user**.
-3. **Credentials → Create credentials → OAuth client ID → Desktop app.** Download the JSON and save it as **`build/google-oauth.json`**, then run `npm run dist`. The installer bundles it, so users just click **Sign in with Google**. (Or paste the ID and secret in Settings → Inbox → *One-time setup*.)
-
-> While the app is in Google's *Testing* mode, only listed test users can sign in, and they must sign in again every 7 days. To lift that, publish the app. Gmail read access is a "restricted" scope, so Google requires a verification review for public use.
 
 ### Using the island
 | Action | How |
@@ -208,7 +212,7 @@ npm run dist       # builds release/AgenticIsland-Setup-<version>.exe
 | `src/main/media.ts` | Now playing and media controls (Windows media session) |
 | `src/main/git.ts` | Git status, secret scan, commit & push |
 | `src/main/mail.ts` | IMAP inbox, reader, verification codes, redaction |
-| `src/main/google.ts` | Sign in with Google + Gmail API (read-only) |
+| `src/main/google.ts` | Gmail API sign-in (kept in the code, not shown in the UI) |
 | `src/main/mailhub.ts` | Picks Gmail or IMAP for the rest of the app |
 | `src/main/usage.ts` | Token usage, plan limits, AI processes |
 | `src/main/store.ts` | Settings, DPAPI secrets, audit log |

@@ -23,12 +23,14 @@ export default defineConfig({
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
-    resolve: { alias: { '@shared': resolve('src/shared') } }
+    resolve: { alias: { '@shared': resolve('src/shared') } },
+    // recorder.ts: tiny bridge for the hidden meeting recorder window.
+    build: { rollupOptions: { input: { index: resolve('src/preload/index.ts'), recorder: resolve('src/preload/recorder.ts') } } }
   },
   renderer: {
     root: resolve('src/renderer'),
     resolve: { alias: { '@shared': resolve('src/shared') } },
     plugins: [react(), cspPlugin()],
-    build: { rollupOptions: { input: resolve('src/renderer/index.html') } }
+    build: { rollupOptions: { input: { index: resolve('src/renderer/index.html'), recorder: resolve('src/renderer/recorder.html') } } }
   }
 })

@@ -19,7 +19,7 @@ const memo: { convo: Turn[]; threadId: string | null; prompt: string; seq: numbe
 }
 
 const EXAMPLES: Record<AskContext, string[]> = {
-  general: ['Read my last mail', 'Summarize my inbox', 'Find my CV on this PC', 'Open YouTube and find lofi music'],
+  general: ['Summarize this email', 'Draft a reply to this', 'Find my CV on this PC', 'Open YouTube and find lofi music'],
   project: ['Explain what changed today', 'Review my uncommitted changes', 'Write tests for the last change'],
   computer: ['Go and read my emails and tell me what matters', 'Find my CV on this PC', 'Open YouTube and find lofi music']
 }
@@ -366,9 +366,7 @@ export function HomePanel({
         <div className="empty">
           {locked
             ? 'Paused. Nothing is running.'
-            : snap.mailStatus === 'watching' || s.activeWorkspace
-              ? 'All caught up. Isla is keeping an eye on things.'
-              : 'Connect your inbox or add a project in Settings so Isla can start helping.'}
+            : 'All caught up. Isla is keeping an eye on things.'}
         </div>
       ) : (
         <ul className="suggestions">
@@ -463,7 +461,7 @@ function TurnResult({
           </button>
         </div>
       ) : (
-        <div className="empty">{snap.mailStatus === 'watching' ? 'No verification code in the last 10 minutes.' : 'Connect your inbox first so Isla can catch codes.'}</div>
+        <div className="empty">{'No verification code in the last 10 minutes.'}</div>
       )
     case 'run': {
       const live = snap.runs.find(r => r.id === result.run.id) ?? result.run

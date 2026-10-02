@@ -9,6 +9,7 @@ import { HomePanel } from './panels/Home'
 import { AgentPanel } from './panels/Agent'
 import { GitPanel } from './panels/Git'
 import { MailPanel } from './panels/Mail'
+import { MeetingsPanel, fmtDuration } from './panels/Meetings'
 import { UsagePanel } from './panels/Usage'
 import { SchedulerPanel } from './panels/Scheduler'
 import { SettingsPanel } from './panels/Settings'
@@ -24,7 +25,7 @@ const TABS: { id: PanelId; icon: string; label: string }[] = [
   { id: 'home', icon: 'home', label: 'Home' },
   { id: 'agent', icon: 'agent', label: 'Agent' },
   { id: 'git', icon: 'git', label: 'Git' },
-  { id: 'mail', icon: 'mail', label: 'Mail' },
+  { id: 'meetings', icon: 'rec', label: 'Recordings' },
   { id: 'usage', icon: 'usage', label: 'AI usage' },
   { id: 'scheduler', icon: 'clock', label: 'Scheduler' },
   { id: 'settings', icon: 'settings', label: 'Settings' },
@@ -42,7 +43,10 @@ const REACTION: Record<Notice['kind'], IslaAnimation> = {
   info: 'surprised',
   reminder: 'excited',
   action: 'alert',
-  device: 'happy'
+  device: 'happy',
+  meeting: 'surprised',
+  'meeting-done': 'success',
+  approval: 'suspicious'
 }
 
 /** Live updates leave out outputs that didn't change — keep the copy we already have (including streamed text). */
@@ -62,12 +66,19 @@ export function App() {
   const [reaction, setReaction] = useState<IslaAnimation | null>(null)
   const [typing, setTyping] = useState(false)
   const [mailUid, setMailUid] = useState<string | null>(null)
+  const [meetingId, setMeetingId] = useState<string | null>(null)
   const [focusRun, setFocusRun] = useState<string | null>(null)
   const [peekMsg, setPeekMsg] = useState<string | null>(null)
   const [askText, setAskText] = useState('')
   const sugIdx = useRef(0)
   const [lastActivity, setLastActivity] = useState(Date.now())
   const [now, setNow] = useState(Date.now())
+  const recording = snap?.meeting.phase === 'recording'
+  useEffect(() => {
+    if (!recording) return
+    const t = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(t)
+  }, [recording])
   const collapseTimer = useRef<number>(0)
   const noticeTimer = useRef<number>(0)
   const reactionTimer = useRef<number>(0)
@@ -135,7 +146,7 @@ export function App() {
         noticeTimer.current = window.setTimeout(() => {
           setNotice(null)
           setMode(m => (m === 'peek' ? 'compact' : m))
-        }, e.kind === 'reminder' ? 45_000 : e.kind === 'device' ? 4000 : e.kind === 'action' ? 120_000 : e.kind === 'otp' ? 20_000 : e.kind === 'suggest' || e.kind === 'commit' ? 9000 : e.kind === 'mail' ? 12_000 : 6000)
+        }, e.kind === 'approval' ? 120_000 : e.kind === 'meeting' ? 60_000 : e.kind === 'meeting-done' ? 15_000 : e.kind === 'reminder' ? 45_000 : e.kind === 'device' ? 4000 : e.kind === 'action' ? 120_000 : e.kind === 'otp' ? 20_000 : e.kind === 'suggest' || e.kind === 'commit' ? 9000 : e.kind === 'mail' ? 12_000 : 6000)
       }
     })
     const t = window.setInterval(() => setNow(Date.now()), 15_000)
@@ -256,6 +267,8 @@ export function App() {
 
   const baseAnimation: IslaAnimation = useMemo(() => {
     if (locked) return 'sleeping'
+    if (snap?.meeting.phase === 'recording') return 'listening'
+    if (snap?.meeting.phase === 'processing') return 'thinking'
     if (typing) return 'listening'
     // Music on → Isla dances (sways to the beat, happy squints, little jumps) — even while a task runs or waits;
     // the orange/green dot on the pill still shows that.
@@ -275,7 +288,7 @@ export function App() {
     if (activityKind === 'chat') return 'listening'      // Chat app — listening in
     if (activityKind === 'office') return 'idle'          // Documents — calm
     return 'idle'
-  }, [locked, pending.length, running, typing, mode, panel, snap?.git?.conflicted, idleMin, media?.status, activityKind])
+  }, [locked, pending.length, running, typing, mode, panel, snap?.git?.conflicted, idleMin, media?.status, activityKind, snap?.meeting.phase])
 
   useEffect(() => {
     if (baseAnimation === 'sleeping') wasAsleep.current = true
@@ -352,7 +365,8 @@ export function App() {
   const sugCount = locked ? 0 : snap.suggestions.length
   // Connected earbuds/headphones: icon + battery on the pill.
   const buds = snap.audioDevices?.[0] ?? null
-  const pillWidth = (mediaMode ? 470 : 250) + rings.length * RING + 26 + (sugCount ? 46 : 0) + (buds ? RING : 0)
+  const meetingChip = snap.meeting.phase === 'recording' || snap.meeting.phase === 'processing'
+  const pillWidth = (pending.length && !vertical ? 72 : 0) + (mediaMode ? 470 : 250) + rings.length * RING + 26 + (sugCount ? 46 : 0) + (buds ? RING : 0) + (meetingChip ? 118 : 0)
   const compactStyle = vertical
     ? { height: (mediaMode ? 232 : 84) + rings.length * (RING + 4) + 30 + (sugCount ? 40 : 0) + (buds ? RING + 4 : 0) }
     : { width: pillWidth }
@@ -475,6 +489,18 @@ export function App() {
         {effectiveMode === 'compact' && (
           <div className="compact-row" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
             <IslaAvatar animation={animation} size={30} ariaLabel={`Isla is ${animation}`} className={facingLeft ? 'face-left' : ''} />
+            {snap.meeting.phase === 'recording' ? (
+              <button className="rec-pill" title="Recording — click to stop and summarize" onClick={() => void window.island.meetingStop()}>
+                <i className="rec-dot" />
+                {!vertical && <span>REC {fmtDuration(now - (snap.meeting.recordingSince ?? now))}</span>}
+                <Icon name="stop" size={10} />
+              </button>
+            ) : snap.meeting.phase === 'processing' ? (
+              <span className="rec-pill working" title={snap.meeting.step ?? 'Summarizing'}>
+                <span className="spinner small" />
+                {!vertical && <span>Summarizing…</span>}
+              </span>
+            ) : null}
             {mediaMode && media ? (
               <>
                 <MediaPill m={media} vertical={vertical} />
@@ -500,6 +526,25 @@ export function App() {
               </span>
             )}
             {/* Tuck away straight from the pill — no need to open the island first. */}
+            {pending.length > 0 && !vertical && (
+              <button
+                className="pill-review"
+                title="A task is waiting for your approval"
+                onClick={() => {
+                  const r = pending[0]
+                  setNotice({ type: 'notify', kind: 'approval', runId: r.id, title: r.mode === 'edit' ? 'Approve — can edit files' : 'Approve this task?', body: r.title })
+                  react('suspicious')
+                  setMode('peek')
+                  window.clearTimeout(noticeTimer.current)
+                  noticeTimer.current = window.setTimeout(() => {
+                    setNotice(null)
+                    setMode(m => (m === 'peek' ? 'compact' : m))
+                  }, 120_000)
+                }}
+              >
+                Review{pending.length > 1 ? ` ${pending.length}` : ''}
+              </button>
+            )}
             {sugCount > 0 && (
               <button className="pill-sugg" title={`${sugCount} suggestion${sugCount > 1 ? 's' : ''} — click to see`} onClick={reopenSuggestion}>
                 <Icon name="spark" size={12} />
@@ -532,7 +577,88 @@ export function App() {
               <strong>{notice.title}</strong>
               <span className={notice.kind === 'otp' ? 'otp-inline' : ''}>{peekMsg ?? notice.body}</span>
             </div>
-            {notice.kind === 'suggest' && notice.suggestionId ? (
+            {notice.kind === 'approval' && notice.runId ? (
+              snap.runs.some(r => r.id === notice.runId && r.status === 'pending-approval') ? (
+                <div className="peek-actions">
+                  <button
+                    className="btn green round"
+                    onClick={() => {
+                      window.clearTimeout(noticeTimer.current)
+                      void window.island.approveRun(notice.runId!).catch(e => setPeekMsg(cleanErr(e)))
+                      setNotice(null)
+                      setMode(m => (m === 'peek' ? 'compact' : m))
+                    }}
+                  >
+                    <Icon name="check" size={12} /> Approve
+                  </button>
+                  <button
+                    className="btn ghost round"
+                    onClick={() => {
+                      window.clearTimeout(noticeTimer.current)
+                      void window.island.rejectRun(notice.runId!)
+                      setNotice(null)
+                      setMode(m => (m === 'peek' ? 'compact' : m))
+                    }}
+                  >
+                    Reject
+                  </button>
+                  <button
+                    className="icon-btn"
+                    title="See exactly what will be sent"
+                    onClick={() => {
+                      window.clearTimeout(noticeTimer.current)
+                      setNotice(null)
+                      open('agent')
+                    }}
+                  >
+                    <Icon name="eye" size={14} />
+                  </button>
+                </div>
+              ) : (
+                <button className="icon-btn" title="Dismiss" onClick={() => setNotice(null)}>
+                  <Icon name="close" size={13} />
+                </button>
+              )
+            ) : notice.kind === 'meeting' && snap.meeting.phase === 'detected' ? (
+              <div className="peek-actions">
+                <button
+                  className="btn red round"
+                  title="Let everyone know you are recording"
+                  onClick={() => {
+                    window.clearTimeout(noticeTimer.current)
+                    void window.island.meetingRecord()
+                    setNotice(null)
+                    setMode(m => (m === 'peek' ? 'compact' : m))
+                  }}
+                >
+                  <Icon name="rec" size={12} /> Record
+                </button>
+                <button
+                  className="icon-btn"
+                  title="Not now"
+                  onClick={() => {
+                    window.clearTimeout(noticeTimer.current)
+                    window.island.meetingDismiss()
+                    setNotice(null)
+                    setMode(m => (m === 'peek' ? 'compact' : m))
+                  }}
+                >
+                  <Icon name="close" size={13} />
+                </button>
+              </div>
+            ) : notice.kind === 'meeting-done' && notice.meetingId ? (
+              <button
+                className="btn primary round"
+                onClick={() => {
+                  window.clearTimeout(noticeTimer.current)
+                  setMeetingId(notice.meetingId!)
+                  setNotice(null)
+                  open('meetings')
+                }}
+              >
+                Open
+              </button>
+            ) : notice.kind === 'suggest' && notice.suggestionId ? (
               <div className="peek-actions">
                 {(() => {
                   const sug = snap.suggestions.find(x => x.id === notice.suggestionId)
@@ -730,6 +856,7 @@ export function App() {
                     aria-label={t.label}
                     onClick={() => {
                       if (t.id === 'mail') setMailUid(null)
+                      if (t.id === 'meetings') setMeetingId(null)
                       setPanel(t.id)
                     }}
                   >
@@ -775,6 +902,7 @@ export function App() {
               {panel === 'home' && <HomePanel snap={snap} open={open} onTyping={setTyping} openMail={openMail} focusRun={focusRun} media={snap.settings.mediaControls ? media : null} />}
               {panel === 'agent' && <AgentPanel snap={snap} />}
               {panel === 'git' && <GitPanel snap={snap} />}
+              {panel === 'meetings' && <MeetingsPanel key={meetingId ?? 'list'} snap={snap} initialId={meetingId} onTyping={setTyping} />}
               {panel === 'mail' && <MailPanel key={mailUid ?? 'inbox'} snap={snap} open={open} initialUid={mailUid} />}
               {panel === 'usage' && <UsagePanel limits={snap.limits} />}
               {panel === 'scheduler' && <SchedulerPanel snap={snap} onTyping={setTyping} />}

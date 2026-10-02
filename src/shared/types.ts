@@ -118,7 +118,89 @@ export interface AppPermission {
   allowed: boolean
 }
 
+export interface MeetingSettings {
+  /** Notice when Teams / Zoom / Meet… starts using the microphone and offer to record. */
+  autoDetect: boolean
+  /** Also record the screen as a video (audio is always recorded for the summary). */
+  recordScreen: boolean
+  /** Transcribe + summarize with Gemini when the meeting ends (needs a Gemini API key). */
+  summarize: boolean
+  /** 'English' or 'meeting' (= the main language spoken in the meeting). */
+  summaryLanguage: 'English' | 'meeting'
+  geminiModel: string
+  /** A Gemini API key is stored (encrypted). The key itself never leaves the main process. */
+  hasGeminiKey: boolean
+  /** Recording defaults (also used by the meeting peek and the tray). */
+  captureSystemAudio: boolean
+  captureMic: boolean
+  /** Display ids to record; empty = the main screen. */
+  screens: string[]
+}
+
+/** What to capture for one recording. */
+export interface RecordOptions {
+  /** Display ids; empty = no video (sound only). */
+  screens: string[]
+  /** Computer sound — what you hear (other people in a call, videos…). */
+  systemAudio: boolean
+  /** Your microphone. */
+  mic: boolean
+}
+
+export interface ScreenSource {
+  displayId: string
+  name: string
+  primary: boolean
+  width: number
+  height: number
+  /** Small preview (data: URL). */
+  thumbnail: string
+}
+
+export type MeetingPhase = 'idle' | 'detected' | 'recording' | 'processing'
+
+/** Live meeting status shown on the island. */
+export interface MeetingState {
+  phase: MeetingPhase
+  /** "Teams", "Zoom", "Google Meet"… */
+  app: string
+  detectedAt: number | null
+  recordingSince: number | null
+  /** What is happening while processing ("Uploading audio…", "Writing summary…"). */
+  step: string | null
+}
+
+export interface MeetingActionItem {
+  task: string
+  owner: string | null
+  due: string | null
+}
+
+export interface MeetingRecord {
+  id: string
+  /** meeting = recorded while a call app used the mic (auto-summarized); screen = a plain screen recording. */
+  kind: 'meeting' | 'screen'
+  app: string
+  title: string
+  startedAt: number
+  endedAt: number
+  folder: string
+  hasVideo: boolean
+  /** recording.mp4 (or .webm on older systems); null when only audio was recorded. */
+  videoFile: string | null
+  status: 'recorded' | 'processing' | 'done' | 'error'
+  error?: string
+  /** Detected main language(s), e.g. "Sinhala, English". */
+  language: string | null
+  summary: string[]
+  decisions: string[]
+  actionItems: MeetingActionItem[]
+  /** Only filled by getMeeting(); the snapshot leaves it out. */
+  transcript?: string
+}
+
 export interface Settings {
+  meetings: MeetingSettings
   /** Your own Google Cloud "Desktop app" OAuth client (only needed if the build doesn't bundle one). */
   google: { clientId: string; clientSecret: string }
   /** Show now-playing media with controls in the island. */
@@ -496,7 +578,7 @@ export interface Suggestion {
   createdAt: number
 }
 
-export type PanelId = 'home' | 'agent' | 'git' | 'mail' | 'usage' | 'scheduler' | 'settings' | 'security'
+export type PanelId = 'home' | 'agent' | 'git' | 'mail' | 'meetings' | 'usage' | 'scheduler' | 'settings' | 'security'
 
 export interface AuditEntry {
   at: number
@@ -523,6 +605,8 @@ export interface Reminder {
 }
 
 export interface IslandSnapshot {
+  meeting: MeetingState
+  meetingList: MeetingRecord[]
   settings: Settings
   providers: ProviderStatus[]
   runs: AgentRun[]
@@ -565,7 +649,11 @@ export type IslandEvent =
   | { type: 'run-output'; id: string; chunk: string }
   | { type: 'dock'; dock: DockState }
   | { type: 'media'; media: MediaState | null }
-  | { type: 'notify'; kind: 'otp' | 'mail' | 'run-done' | 'run-error' | 'security' | 'info' | 'suggest' | 'commit' | 'reminder' | 'action' | 'device'
+  | { type: 'notify'; kind: 'otp' | 'mail' | 'run-done' | 'run-error' | 'security' | 'info' | 'suggest' | 'commit' | 'reminder' | 'action' | 'device' | 'meeting' | 'meeting-done' | 'approval'
+      /** For approval peeks: the task waiting for Approve / Reject. */
+      runId?: string
+      /** For meeting peeks: the finished meeting's id (Open summary). */
+      meetingId?: string
       title: string
       body: string
       url?: string
@@ -593,6 +681,16 @@ export interface IslandApi {
   dragStart(pillWidth: number, pillHeight: number, offsetX: number, offsetY: number): void
   dragEnd(): void
   setHidden(hidden: boolean): void
+  meetingRecord(opts?: RecordOptions): Promise<{ ok: boolean; message: string }>
+  listScreens(): Promise<ScreenSource[]>
+  meetingStop(): Promise<void>
+  meetingDismiss(): void
+  meetingRetry(id: string): Promise<void>
+  getMeeting(id: string): Promise<MeetingRecord | null>
+  openMeetingFolder(id: string): Promise<void>
+  playMeetingVideo(id: string): Promise<void>
+  deleteMeeting(id: string): Promise<void>
+  setGeminiKey(key: string | null): Promise<{ ok: boolean; message: string }>
   setPeekActive(active: boolean): Promise<boolean>
   mediaControl(cmd: 'toggle' | 'next' | 'prev'): void
   updateSettings(patch: DeepPartial<Settings>): Promise<Settings>

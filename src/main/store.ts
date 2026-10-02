@@ -9,6 +9,17 @@ const secretsFile = () => join(dir(), 'secrets.bin')
 const auditFile = () => join(dir(), 'audit.log')
 
 export const defaultSettings: Settings = {
+  meetings: {
+    autoDetect: true,
+    recordScreen: true,
+    summarize: true,
+    summaryLanguage: 'English',
+    geminiModel: 'gemini-2.5-flash',
+    hasGeminiKey: false,
+    captureSystemAudio: true,
+    captureMic: true,
+    screens: []
+  },
   google: { clientId: '', clientSecret: '' },
   mediaControls: true,
   earbuds: true,
@@ -84,6 +95,7 @@ export function loadSettings(): Settings {
     settings = defaultSettings
   }
   settings.mail.hasPassword = !!readSecret('mailPassword')
+  settings.meetings.hasGeminiKey = !!readSecret('geminiKey')
   // assistant.provider is deprecated (General runs now always follow activeProvider) — never let a stale pinned value resurface.
   settings.assistant.provider = 'auto'
   // The old built-in default — background checks now use the model you picked for your agent.
@@ -103,6 +115,7 @@ export function patchSettings(patch: DeepPartial<Settings>): Settings {
     delete p.mail.googleEmail
   }
   delete p.workspaces
+  if (p.meetings) delete p.meetings.hasGeminiKey
   delete p.dock
   delete p.activeWorkspace
   delete p.scheduledTasks

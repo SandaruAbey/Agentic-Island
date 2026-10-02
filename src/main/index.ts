@@ -1,5 +1,7 @@
 import {
   app,
+  desktopCapturer,
+  webContents,
   BrowserWindow,
   clipboard,
   dialog,
@@ -21,6 +23,7 @@ import { basename, join, resolve } from 'node:path'
 import type {
   ActivityContext,
   AgentRun,
+  RecordOptions,
   AskContext,
   Reminder,
   InstalledApp,
@@ -49,6 +52,7 @@ import { computeLimits, listAiProcesses, scanUsage } from './usage'
 import { buildSuggestions, PREDICT_PROMPT } from './proactive'
 import { ContextWatcher } from './context'
 import { MediaWatcher } from './media'
+import { MeetingManager } from './meetings'
 import { ScreenReader } from './screen'
 import { InsightEngine, redactScreen } from './insight'
 import { scanInstalledApps } from './apps'
@@ -331,6 +335,24 @@ async function connectAntigravity(): Promise<{ ok: boolean; message: string }> {
   broadcastSoon()
   return { ok: true, message: 'Connected — Antigravity can now use Isla’s tools during tasks you approve.' }
 }
+
+/** Meetings: notice calls, record on click, summarize with Gemini afterwards. */
+const meetings = new MeetingManager({
+  settings: () => getSettings().meetings,
+  geminiKey: () => readSecret('geminiKey'),
+  browserTitle: () => (context.current?.kind === 'browser' || context.current?.kind === 'chat' ? context.current.title : ''),
+  isLocked: () => security.locked,
+  // Windows "exclude from capture": the island stays visible to you but never appears in the recording.
+  hideFromCapture: hidden => {
+    if (win && !win.isDestroyed()) win.setContentProtection(hidden)
+  },
+  onChange: () => {
+    broadcastSoon()
+    refreshTray()
+  },
+  notify: e => send(e),
+  log: audit
+})
 
 /** Created once userData is known (see whenReady). */
 let insight: InsightEngine | null = null
@@ -624,6 +646,16 @@ async function ask(text: string, askCtx: AskContext, threadId: string | null = n
     : sec.text
   if (!t) return { type: 'error', message: 'Type something first.' }
   if (security.locked) return { type: 'error', message: 'Kill switch is engaged. Resume the island first.' }
+  // Meeting recording by voice of command: "record this meeting", "stop recording".
+  if (/^(please\s+)?(start\s+)?record(ing)?\s+(this\s+|the\s+|my\s+)?(meeting|call|screen)\b/i.test(t)) {
+    const r = await meetings.record()
+    return r.ok ? { type: 'chat', text: `🔴 ${r.message} It will be summarized when you stop or the call ends.` } : { type: 'error', message: r.message }
+  }
+  if (/^(please\s+)?stop\s+(the\s+)?record(ing)?\b/i.test(t)) {
+    if (meetings.state.phase !== 'recording') return { type: 'chat', text: 'Nothing is being recorded.' }
+    void meetings.stop('Stopped by you')
+    return { type: 'chat', text: 'Stopped. Summarizing the meeting now — I’ll pop up when it’s ready.' }
+  }
   // Small talk never needs an agent (no tokens, no approval).
   const chat = smallTalk(t)
   if (chat) return { type: 'chat', text: chat }
@@ -767,8 +799,20 @@ async function ask(text: string, askCtx: AskContext, threadId: string | null = n
       return { type: 'error', message: (e as Error).message }
     }
   }
+  // No inbox connection (the normal case): mail is read from the browser on screen.
+  if (mail.status !== 'watching' && MAILISH.test(t)) {
+    const onScreen = insight?.screenApp?.kind === 'mail' || insight?.screenApp?.kind === 'browser' ? scr : ''
+    if (ctx === 'general' && onScreen.length > 80) {
+      try {
+        return { type: 'run', run: agents.liteRun(t, LITE_SYSTEM, withScreen(t, redactScreen(onScreen).slice(0, 5000), insight?.screenApp?.app), model, security.locked) }
+      } catch (e) {
+        return { type: 'error', message: (e as Error).message }
+      }
+    }
+    return { type: 'chat', text: 'Open your mail (Gmail, Outlook…) in the browser and ask again — I’ll read it from the screen and summarize or draft a reply.' }
+  }
   try {
-    if (!AI_VERBS.test(t)) {
+    if (mail.status === 'watching' && !AI_VERBS.test(t)) {
       // "read my last mail", "show the latest email", "what was the newest message"
       if (/\b(read|show|open|what|check|see|get)\b/i.test(t) && /\b(last|latest|recent|newest|new)\b/i.test(t) && /\b(e-?mail|mail|message)\b/i.test(t) && !/\b(e-?mails|mails|messages)\b/i.test(t)) {
         const inbox = await needInbox()
@@ -798,7 +842,7 @@ async function ask(text: string, askCtx: AskContext, threadId: string | null = n
     }
     // Mail questions go to the AI with the newest emails attached (codes hidden).
     let mailUids: string[] | undefined
-    if (MAILISH.test(t)) mailUids = (await needInbox()).slice(0, 6).map(m => m.uid)
+    if (MAILISH.test(t) && mail.status === 'watching') mailUids = (await needInbox()).slice(0, 6).map(m => m.uid)
     // A project-context prompt that reads as a live web lookup (not a code/project question) gets web
     // access instead of silently failing — project runs never get web tools (see queueRun's allowWeb),
     // so staying in project context here would just have the agent say it can't search.
@@ -841,6 +885,8 @@ const sentOutputs = new Map<string, number>()
 function snapshot(withMedia = true, full = true): IslandSnapshot {
   security.activeRuns = agents.activeCount
   return {
+    meeting: meetings.state,
+    meetingList: meetings.list,
     settings: getSettings(),
     providers: agents.providers,
     runs: agents.runs.map(r => {
@@ -901,6 +947,7 @@ function broadcastSoon(): void {
     send({ type: 'snapshot', snapshot: snap })
     if (sentOutputs.size > 60) for (const id of sentOutputs.keys()) if (!agents.runs.some(r => r.id === id)) sentOutputs.delete(id)
     peekNewSuggestion(snap.suggestions)
+    peekNewApprovals(snap.runs)
     refreshTray()
   }, 60)
 }
@@ -908,6 +955,25 @@ function broadcastSoon(): void {
 // Every new suggestion gets one short peek (with a matching face); after that it lives behind the ✨ button on the pill.
 const peeked = new Set<string>()
 let lastPeekAt = 0
+// A task that waits for approval pops out of the island with Approve / Reject — no need to open the panel.
+const approvalPeeked = new Set<string>()
+function peekNewApprovals(runs: AgentRun[]): void {
+  if (security.locked) return
+  for (const r of runs) {
+    if (r.status !== 'pending-approval' || approvalPeeked.has(r.id)) continue
+    approvalPeeked.add(r.id)
+    const label = agents.providers.find(p => p.id === r.provider)?.label ?? r.provider
+    send({
+      type: 'notify',
+      kind: 'approval',
+      runId: r.id,
+      title: r.mode === 'edit' ? 'Approve — can edit files' : 'Approve this task?',
+      body: `${r.title} · ${label}`
+    })
+    return // one at a time; the rest are behind "Review" on the pill
+  }
+}
+
 function peekNewSuggestion(sugs: Suggestion[]): void {
   if (!getSettings().proactive.enabled || security.locked) return
   for (const sug of sugs) {
@@ -926,6 +992,7 @@ function peekNewSuggestion(sugs: Suggestion[]): void {
 
 function killSwitch(reason: string): void {
   const killed = agents.killAll(reason)
+  meetings.emergencyStop()
   git.stop()
   context.stop()
   insight?.stop()
@@ -964,11 +1031,14 @@ function startWatchers(): void {
   if (s.assistant.screenWatch) insight?.start()
   if (s.mediaControls) media.start()
   if (s.earbuds) bluetooth.start()
+  if (s.meetings.autoDetect) meetings.start()
   scheduler.start()
 }
 
 async function shutdown(): Promise<void> {
   agents.killAll('shutdown')
+  await meetings.stop('Isla shut down')
+  meetings.stopWatching()
   await mail.stop()
   git.stop()
   context.stop()
@@ -1054,6 +1124,51 @@ function islandUsageRows(): { cost: number; rows: ModelUsage[] } {
 
 function registerIpc(): void {
   handle('snapshot', () => snapshot())
+
+  // ---- meetings
+  handle('meeting:record', (opts?: RecordOptions) => {
+    if (!opts) return meetings.record()
+    const clean: RecordOptions = {
+      screens: Array.isArray(opts.screens) ? opts.screens.map(String).slice(0, 8) : [],
+      systemAudio: opts.systemAudio === true,
+      mic: opts.mic === true
+    }
+    // Remember the choice for next time (meeting peek and tray use it too).
+    const st = getSettings()
+    replaceSettings({ ...st, meetings: { ...st.meetings, screens: clean.screens, captureSystemAudio: clean.systemAudio, captureMic: clean.mic } })
+    return meetings.record(undefined, clean)
+  })
+  handle('screens:list', () => meetings.listScreens())
+  handle('meeting:stop', () => meetings.stop('Stopped by you'))
+  ipcMain.on('meeting:dismiss', e => {
+    if (trusted(e)) meetings.dismiss()
+  })
+  handle('meeting:retry', (id: string) => meetings.process(String(id), true))
+  handle('meeting:play', (id: string) => meetings.play(String(id)))
+  handle('meeting:get', (id: string) => meetings.get(String(id)))
+  handle('meeting:open', (id: string) => meetings.open(String(id)))
+  handle('meeting:delete', (id: string) => meetings.remove(String(id)))
+  handle('gemini:set-key', async (key: string | null) => {
+    if (key === null) {
+      writeSecret('geminiKey', null)
+      const st = getSettings()
+      replaceSettings({ ...st, meetings: { ...st.meetings, hasGeminiKey: false } })
+      audit('gemini.key', 'removed')
+      broadcastSoon()
+      return { ok: true, message: 'Gemini key removed.' }
+    }
+    const k = String(key).trim()
+    if (!/^[A-Za-z0-9_-]{20,100}$/.test(k)) return { ok: false, message: 'That does not look like a Gemini API key.' }
+    // Check it works before saving (lists models; sends nothing else).
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1', { headers: { 'x-goog-api-key': k } }).catch(() => null)
+    if (!r?.ok) return { ok: false, message: `Google rejected this key (${r?.status ?? 'no connection'}).` }
+    if (!writeSecret('geminiKey', k)) return { ok: false, message: 'Windows encryption is not available on this PC.' }
+    const st = getSettings()
+    replaceSettings({ ...st, meetings: { ...st.meetings, hasGeminiKey: true } })
+    audit('gemini.key', 'saved (encrypted)')
+    broadcastSoon()
+    return { ok: true, message: 'Key saved — meetings will be summarized.' }
+  })
   handle('ask', (text: string, ctx: AskContext, threadId: unknown) =>
     ask(text, ctx === 'project' || ctx === 'computer' ? ctx : 'general', typeof threadId === 'string' && /^[\w-]{8,64}$/.test(threadId) ? threadId : null)
   )
@@ -1109,6 +1224,10 @@ function registerIpc(): void {
     if (before.mediaControls !== next.mediaControls) {
       if (next.mediaControls && !security.locked) media.start()
       else media.stop()
+    }
+    if (before.meetings.autoDetect !== next.meetings.autoDetect) {
+      if (next.meetings.autoDetect && !security.locked) meetings.start()
+      else meetings.stopWatching()
     }
     if (before.launchAtLogin !== next.launchAtLogin) app.setLoginItemSettings({ openAtLogin: next.launchAtLogin })
     if (before.assistant.screenWatch !== next.assistant.screenWatch) {
@@ -1610,6 +1729,9 @@ function refreshTray(): void {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: win?.isVisible() && !s.dock.hidden ? 'Tuck island into edge' : 'Show island', accelerator: TOGGLE_SHORTCUT, click: toggleWindow },
+      meetings.state.phase === 'recording'
+        ? { label: '■ Stop recording', click: () => void meetings.stop('Stopped from tray') }
+        : { label: '● Record screen', enabled: !security.locked && meetings.state.phase !== 'processing', click: () => void meetings.record() },
       { type: 'separator' },
       security.locked
         ? { label: 'Resume island', click: resume }
@@ -1637,8 +1759,23 @@ function createTray(): void {
 }
 
 function harden(): void {
-  session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))
-  session.defaultSession.setPermissionCheckHandler(() => false)
+  const isRecorder = (id: number | undefined) => id !== undefined && id === meetings.recorderContentsId
+  session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(isRecorder(wc?.id) && (perm === 'media' || perm === 'display-capture')))
+  session.defaultSession.setPermissionCheckHandler((wc, perm) => isRecorder(wc?.id) && (perm === 'media' || perm === 'display-capture'))
+  // Screen + Windows loopback audio (the other people in the call) for the meeting recorder only.
+  session.defaultSession.setDisplayMediaRequestHandler((req, cb) => {
+    const wc = req.frame ? webContents.fromFrame(req.frame) : undefined
+    if (!isRecorder(wc?.id)) return cb({})
+    // Hand out exactly the screens the user chose, one per request; only the first carries the computer sound.
+    const next = meetings.nextSource()
+    if (!next) return cb({})
+    // Sources must be fetched fresh for each request — older source objects make getDisplayMedia hang.
+    void desktopCapturer.getSources({ types: ['screen'] }).then(all => {
+      const src = all.find(x => x.id === next.id) ?? all[0]
+      if (!src) return cb({})
+      cb(next.audio ? { video: src, audio: 'loopback' } : { video: src })
+    })
+  })
   app.on('web-contents-created', (_e, contents) => {
     contents.setWindowOpenHandler(() => ({ action: 'deny' }))
     contents.on('will-navigate', (e, url) => {
@@ -1656,6 +1793,7 @@ app.whenReady().then(async () => {
   harden()
   loadSettings()
   reminders.load(join(app.getPath('userData'), 'reminders.json'))
+  meetings.load()
   agents.assistantDir = join(app.getPath('userData'), 'assistant')
   mkdirSync(agents.assistantDir, { recursive: true })
   insight = new InsightEngine({
@@ -1690,6 +1828,7 @@ app.whenReady().then(async () => {
 app.on('second-instance', () => win?.showInactive())
 app.on('before-quit', () => {
   quitting = true
+  meetings.stopWatching()
   agents.killAll('app quit')
   context.stop()
   media.stop()

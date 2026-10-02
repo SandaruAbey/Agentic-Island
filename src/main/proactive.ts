@@ -47,14 +47,6 @@ export function buildSuggestions(
           icon: 'key',
           action: { type: 'open-panel', panel: 'mail' }
         })
-    } else {
-      push({
-        id: 'signin:setup',
-        title: 'Let me catch sign-in codes for you',
-        detail: 'Connect your inbox once and codes appear here automatically.',
-        icon: 'key',
-        action: { type: 'open-panel', panel: 'settings' }
-      })
     }
   }
   const unread = life.inbox.filter(m => m.unread)
