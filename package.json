@@ -4,15 +4,15 @@
     "version":  "0.1.0",
     "description":  "A macOS-style Dynamic Island for Windows that connects to your local AI coding agents.",
     "author":  "FiveNeurals",
-    "license":  "SEE LICENSE IN LICENSE",
-    "copyright":  "Copyright © 2026 FiveNeurals. All rights reserved.",
+    "license":  "MIT",
+    "copyright":  "Copyright © 2026 FiveNeurals.",
     "main":  "./out/main/index.js",
     "scripts":  {
                     "dev":  "electron-vite dev",
                     "build":  "electron-vite build",
                     "typecheck":  "tsc --noEmit -p tsconfig.json",
                     "icon":  "node scripts/make-icon.mjs",
-                    "predist": "node -e \"try { require('child_process').execSync('taskkill /F /IM \\\"Agentic Island.exe\\\" /T', { stdio: 'ignore' }); } catch {}\"",
+                    "predist": "node -e \"try { require('child_process').execSync('taskkill /F /IM \\\"Agentic Island.exe\\\" /T', { stdio: 'ignore' }); } catch {}; try { require('child_process').execSync('taskkill /F /IM IslaHelper.exe /T', { stdio: 'ignore' }); } catch {}\"",
                     "dist":  "node scripts/build-helper.mjs && electron-vite build && electron-builder --win --x64 && node scripts/create-installer-script.mjs",
                     "start":  "electron-vite preview"
                 },

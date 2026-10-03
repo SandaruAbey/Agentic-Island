@@ -12,6 +12,12 @@ if (!existsSync(csc)) {
   console.warn('csc.exe not found — IslaHelper.exe not built; Isla will fall back to PowerShell.')
   process.exit(0)
 }
+
+// Stop any running instances so csc.exe can write to build\IslaHelper.exe
+try {
+  execFileSync('taskkill', ['/F', '/IM', 'IslaHelper.exe', '/T'], { stdio: 'ignore' })
+} catch {}
+
 mkdirSync('build', { recursive: true })
 const refs = [
   join(fw, 'System.Runtime.dll'),
