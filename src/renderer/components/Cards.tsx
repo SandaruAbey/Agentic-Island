@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FileInfo, LinkPreview } from '@shared/types'
-import { Icon } from './ui'
+import { Icon, Shimmer } from './ui'
 
 /** One lookup per path/url for the whole session (thumbnails and previews are small data URLs). */
 const fileCache = new Map<string, Promise<FileInfo | null>>()
@@ -61,7 +61,7 @@ export function FileCard({ path }: { path: string }) {
           {msg ??
             (info
               ? [info.isDir ? 'Folder' : ext || 'File', !info.isDir && fmtSize(info.size), new Date(info.modified).toLocaleDateString()].filter(Boolean).join(' · ')
-              : 'Loading…')}
+              : <Shimmer>Loading…</Shimmer>)}
         </em>
       </span>
       <button

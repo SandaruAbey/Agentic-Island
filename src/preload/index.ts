@@ -75,7 +75,21 @@ const api: IslandApi = {
   resume: () => invoke('security:resume'),
   shutdown: () => invoke('security:shutdown'),
   scanInstalledApps: () => invoke('apps:scan'),
-  setAppPermission: (process: string, name: string, allowed: boolean) => invoke('apps:set-permission', process, name, allowed)
+  setAppPermission: (process: string, name: string, allowed: boolean) => invoke('apps:set-permission', process, name, allowed),
+  installPlugin: from => invoke('plugins:install', from),
+  uninstallPlugin: id => invoke('plugins:uninstall', id),
+  exportPlugin: id => invoke('plugins:export', id),
+  setPluginEnabled: (id, enabled) => invoke('plugins:set-enabled', id, enabled === true),
+  setPluginValues: (id, values) => invoke('plugins:set-values', id, values),
+  setPluginSchedule: (id, toolId, schedule) => invoke('plugins:set-schedule', id, toolId, schedule),
+  runPlugin: (id, toolId) => invoke('plugins:run', id, toolId),
+  stopPlugin: id => invoke('plugins:stop', id),
+  openPluginReport: (id, runId, reveal) => invoke('plugins:open-report', id, runId, reveal === true),
+  exportPluginRun: (id, runId) => invoke('plugins:export-run', id, runId),
+  deletePluginRun: (id, runId) => invoke('plugins:delete-run', id, runId),
+  openPluginReports: id => invoke('plugins:open-reports', id),
+  openPluginsFolder: () => invoke('plugins:open-folder'),
+  reloadPlugins: () => invoke('plugins:reload')
 }
 
 contextBridge.exposeInMainWorld('island', api)

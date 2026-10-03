@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AiLimit, AiProcess, ModelUsage, UsageReport } from '@shared/types'
 import { LimitCards } from '../components/Rings'
-import { Segmented, fmtTokens, timeAgo } from '../components/ui'
+import { Segmented, Shimmer, fmtTokens, timeAgo } from '../components/ui'
 
 export function UsagePanel({ limits }: { limits: AiLimit[] }) {
   const [report, setReport] = useState<UsageReport | null>(null)
@@ -97,7 +97,7 @@ export function UsagePanel({ limits }: { limits: AiLimit[] }) {
 
       <h3 className="label">AI running on this PC</h3>
       {procs === null ? (
-        <div className="empty">Scanning processes…</div>
+        <div className="empty"><Shimmer icon="search">Scanning processes…</Shimmer></div>
       ) : procs.length === 0 ? (
         <div className="empty">No AI agents or AI apps are running right now.</div>
       ) : (

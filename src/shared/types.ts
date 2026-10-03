@@ -297,6 +297,8 @@ export interface AgentRun {
   hasMail: boolean
   /** Set when this run was fired by the TaskScheduler — links back to ScheduledTask.id. */
   scheduledTaskId?: string
+  /** Set when a plugin asked for this run (web research) — its result goes back to the plugin, never handed off to a PC task. */
+  pluginId?: string
   /** Set by the main process only: the run may operate the PC through Isla's computer-control tools. */
   computer?: boolean
   /** Conversation this run belongs to (follow-ups share it); the first run's id. */
@@ -578,7 +580,7 @@ export interface Suggestion {
   createdAt: number
 }
 
-export type PanelId = 'home' | 'agent' | 'git' | 'mail' | 'meetings' | 'usage' | 'scheduler' | 'settings' | 'security'
+export type PanelId = 'home' | 'agent' | 'git' | 'mail' | 'meetings' | 'usage' | 'scheduler' | 'plugins' | 'settings' | 'security'
 
 export interface AuditEntry {
   at: number
@@ -642,6 +644,8 @@ export interface IslandSnapshot {
   antigravityComputer: boolean | null
   /** Connected Bluetooth earbuds/headphones with battery. */
   audioDevices: AudioDevice[]
+  /** Plugins found on this PC (built-in and installed), with their state. */
+  plugins: PluginInfo[]
 }
 
 export type IslandEvent =
@@ -665,6 +669,8 @@ export type IslandEvent =
       reminderId?: string
       /** For suggestion peeks: which kind, so Isla's face can match it. */
       icon?: Suggestion['icon']
+      /** Where "Open" goes (default: the Agent panel). */
+      panel?: PanelId
     }
 
 /** API exposed on window.island by the preload script. */
@@ -740,6 +746,101 @@ export interface IslandApi {
   scanInstalledApps(): Promise<InstalledApp[]>
   /** Set screen-reading permission for a specific app. */
   setAppPermission(process: string, name: string, allowed: boolean): Promise<void>
+  /** Pick a plugin folder or .zip and install it (Isla shows its permissions and asks first). */
+  installPlugin(from: 'folder' | 'zip'): Promise<{ ok: boolean; message: string }>
+  uninstallPlugin(id: string): Promise<void>
+  /** Pack an installed plugin into a .zip to share with someone else. */
+  exportPlugin(id: string): Promise<{ ok: boolean; message: string }>
+  setPluginEnabled(id: string, enabled: boolean): Promise<void>
+  /** For "secret" settings: '' keeps the saved value, null clears it. */
+  setPluginValues(id: string, values: Record<string, PluginValue | null>): Promise<void>
+  setPluginSchedule(id: string, toolId: string, schedule: { enabled: boolean; recurrence: TaskRecurrence }): Promise<void>
+  runPlugin(id: string, toolId: string): Promise<void>
+  stopPlugin(id: string): Promise<void>
+  openPluginReport(id: string, runId: string, reveal?: boolean): Promise<void>
+  /** Save one past run (its report files + summary + log) as a .zip. */
+  exportPluginRun(id: string, runId: string): Promise<{ ok: boolean; message: string }>
+  deletePluginRun(id: string, runId: string): Promise<void>
+  /** Open the folder with every report this plugin saved. */
+  openPluginReports(id: string): Promise<void>
+  openPluginsFolder(): Promise<void>
+  reloadPlugins(): Promise<void>
+}
+
+// ---------------------------------------------------------------- plugins
+
+/** What a plugin can ask Isla to do for it. Network and files are not sandboxed — plugins are trusted code, like editor extensions. */
+export type PluginPermission = 'ai' | 'ai-web' | 'notify' | 'network' | 'browser'
+
+export type PluginValue = string | number | boolean
+
+export interface PluginSettingDef {
+  key: string
+  label: string
+  /** secret: stored encrypted (Windows DPAPI), never sent back to the UI. */
+  type: 'text' | 'textarea' | 'number' | 'boolean' | 'select' | 'secret'
+  default?: PluginValue
+  help?: string
+  options?: string[]
+}
+
+export interface PluginToolDef {
+  id: string
+  title: string
+  description?: string
+  /** Chat phrases that start this tool ("seo scout"). The whole message is passed to the tool as input.text. */
+  chat?: string[]
+  /** Suggested schedule; the user turns it on or changes it in the Plugins tab. */
+  schedule?: Exclude<TaskRecurrence, { type: 'once' }>
+  /** Hard stop for one run (default 15, max 120). */
+  timeoutMinutes?: number
+}
+
+/** isla-plugin.json */
+export interface PluginManifest {
+  id: string
+  name: string
+  version: string
+  description: string
+  author?: string
+  homepage?: string
+  /** Entry file, relative to the plugin folder (default index.js). */
+  main?: string
+  permissions: PluginPermission[]
+  settings?: PluginSettingDef[]
+  tools: PluginToolDef[]
+}
+
+export interface PluginRunSummary {
+  id: string
+  toolId: string
+  startedAt: number
+  endedAt: number | null
+  status: 'running' | 'done' | 'error' | 'stopped'
+  trigger: 'manual' | 'chat' | 'schedule'
+  /** Short Markdown result shown in the panel (and in chat). */
+  summary: string
+  /** Folder with the saved report files, if the run saved any. */
+  reportDir: string | null
+  reportFiles: string[]
+  /** The run's last log lines, kept so past runs can be checked later. */
+  log: string[]
+}
+
+export interface PluginInfo {
+  manifest: PluginManifest
+  /** builtin: ships with Isla (plugins/ in the app); installed: added by you. */
+  source: 'builtin' | 'installed'
+  dir: string
+  enabled: boolean
+  /** Problem loading it (bad manifest, missing entry file). */
+  error: string | null
+  /** Secret settings show as '' here; these keys have a saved value. */
+  values: Record<string, PluginValue>
+  secretsSet: string[]
+  schedules: Record<string, { enabled: boolean; recurrence: TaskRecurrence; nextRunAt: number | null }>
+  running: { runId: string; toolId: string; startedAt: number; log: string[]; progress: number | null } | null
+  history: PluginRunSummary[]
 }
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? (T[K] extends unknown[] ? T[K] : DeepPartial<T[K]>) : T[K] }

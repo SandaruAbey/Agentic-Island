@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { IslandSnapshot, MailMessage, MailSummary, PanelId } from '@shared/types'
-import { Icon, timeAgo, cleanErr } from '../components/ui'
+import { Icon, Shimmer, timeAgo, cleanErr } from '../components/ui'
 
 export function MailPanel({ snap, open, initialUid }: { snap: IslandSnapshot; open: (p: PanelId) => void; initialUid?: string | null }) {
   const [copied, setCopied] = useState<string | null>(null)
@@ -129,7 +129,7 @@ export function MailPanel({ snap, open, initialUid }: { snap: IslandSnapshot; op
 }
 
 export function MailList({ messages, onOpen, loading }: { messages: MailSummary[]; onOpen: (uid: string) => void; loading?: boolean }) {
-  if (!messages.length) return <div className="empty">{loading ? 'Loading…' : 'No messages yet.'}</div>
+  if (!messages.length) return <div className="empty">{loading ? <Shimmer>Loading…</Shimmer> : 'No messages yet.'}</div>
   return (
     <ul className="mail-list">
       {messages.map(x => (

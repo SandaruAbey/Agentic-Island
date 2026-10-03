@@ -1,0 +1,34 @@
+{
+  "id": "seo-scout",
+  "name": "SEO Scout",
+  "version": "2.2.0",
+  "description": "Finds businesses of any type in your cities — or anywhere near you — on Google Maps (read in Isla's browser) or from your own list, works out how each website is built, runs a deep SEO, AEO and GEO audit and measures real page speed. Collects every business's contacts. Saves an HTML report plus CSVs. No API keys and no AI needed.",
+  "author": "FiveNeurals",
+  "main": "index.js",
+  "permissions": ["browser", "network", "notify", "ai", "ai-web"],
+  "settings": [
+    { "key": "businessType", "label": "Business type", "type": "text", "default": "", "help": "Anything: dentist, hotel, restaurant, real estate agent, accountant, car repair, school… Empty = any business." },
+    { "key": "cities", "label": "Cities", "type": "text", "default": "", "help": "Comma separated. Empty = near you. In chat: “seo scout dentists in Colombo and Kandy”." },
+    { "key": "country", "label": "Country", "type": "text", "default": "" },
+    { "key": "perCity", "label": "Max websites per city", "type": "number", "default": 20 },
+    { "key": "useMaps", "label": "Find on Google Maps (in Isla's browser, no key)", "type": "boolean", "default": true, "help": "Isla opens Google Maps in a private browser window and reads the results: name, phone, address, rating, reviews, website." },
+    { "key": "showBrowser", "label": "Show the browser while it works", "type": "boolean", "default": false },
+    { "key": "useAi", "label": "Also find with AI web research", "type": "boolean", "default": false, "help": "Uses one task of your AI agent per run." },
+    { "key": "extraSites", "label": "Always check these sites", "type": "textarea", "default": "", "help": "One per line: URL | City | Name (City and Name optional)." },
+    { "key": "maxPages", "label": "Pages to crawl per website", "type": "number", "default": 8 },
+    { "key": "speed", "label": "Measure real page speed", "type": "boolean", "default": true, "help": "Loads each site fresh in Isla's browser at phone size: LCP, CLS, FCP, load time, page weight." },
+    { "key": "aiInsights", "label": "Add AI-written insights", "type": "boolean", "default": false, "help": "The report always has rule-based findings; this adds an AI summary on top." },
+    { "key": "googleKey", "label": "Google API key (optional, advanced)", "type": "secret", "help": "Not needed. If you add one (Places API (New) + PageSpeed Insights API), Isla uses Google's official APIs instead of the browser and adds Lighthouse scores. Stored encrypted." },
+    { "key": "braveKey", "label": "Brave Search API key (optional, advanced)", "type": "secret", "help": "Not needed. Adds web-search discovery and finds websites for map listings that have none. Stored encrypted." }
+  ],
+  "tools": [
+    {
+      "id": "report",
+      "title": "Find businesses & audit their websites",
+      "description": "Finds businesses per city (or near you) on Google Maps, crawls each website, runs 75+ SEO / AEO / GEO checks, measures real speed, collects contacts, and saves report.html + sites.csv + contacts.csv + checks.csv.",
+      "chat": ["seo scout", "seo report for", "seo audit for", "aeo report for", "geo report for", "local seo report", "website audit for"],
+      "schedule": { "type": "daily", "hour": 9, "minute": 0 },
+      "timeoutMinutes": 120
+    }
+  ]
+}

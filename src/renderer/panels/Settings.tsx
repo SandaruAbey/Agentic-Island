@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AppPermission, InstalledApp, IslandSnapshot, ProviderId, ProviderStatus, Settings } from '@shared/types'
-import { Icon, Section, Segmented, Toggle, cleanErr } from '../components/ui'
+import { Icon, Section, Segmented, Shimmer, Toggle, cleanErr } from '../components/ui'
 
 type Tab = 'agents' | 'workspaces' | 'general' | 'permissions'
 
@@ -574,7 +574,7 @@ function AppPermissions({ snap }: { snap: IslandSnapshot }) {
         style={{ width: '100%', marginBottom: 8 }}
       />
       {loading ? (
-        <div className="empty">Scanning installed apps…</div>
+        <div className="empty"><Shimmer icon="search">Scanning installed apps…</Shimmer></div>
       ) : filtered.length === 0 ? (
         <div className="empty">No apps found matching "{filter}".</div>
       ) : (

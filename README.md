@@ -112,6 +112,20 @@ Anything in the Windows media flyout works: **YouTube in Chrome/Edge/Firefox, Sp
   - Isla's own background-check cost
   - **every AI app running on the PC** (Claude, Codex, Gemini, Antigravity, Cursor, Windsurf, Ollama, LM Studio, ChatGPT…) with live CPU and RAM
 
+### 🧩 Plugins: small tools anyone can add
+- **Plugins tab:** each plugin has **Run · History · Settings** tabs, so the result is never buried under the settings. Turn it on, **Run now**, or set it to **repeat daily or weekly**. Progress shows live as steps, and when the run finishes Isla pops up with a summary.
+- **Run history:** every past run (up to 50) keeps its summary, log and report. **Open report** opens a sortable HTML page in your browser; **Export** saves the run (report, CSVs, summary, log) as a .zip; **Delete** removes it.
+- **From chat:** each plugin lists its phrases, e.g. *"seo scout dentists in Colombo and Kandy"*.
+- **Share:** **Share .zip** packs a plugin, and the other person adds it with **Install .zip** (or **Install folder**). Isla shows the plugin's author and permissions and asks before installing.
+- **Built in: SEO Scout** works for any business type in any city.
+  - It finds businesses on Google Maps, read in a private Isla browser window, so **no API key** is needed. Leave the type and city empty to look at any business near you. Your own list of sites is an extra source.
+  - It detects how each website is built (WordPress, WooCommerce, Shopify, Wix, Laravel, Next.js, custom code…).
+  - It crawls several pages per site, runs **75+ SEO / AEO / GEO checks**, measures real page speed (LCP, CLS, FCP), and collects contacts (emails, phones, WhatsApp, social profiles).
+  - It lists businesses with no website at all.
+  - It saves `report.html` plus `sites.csv`, `contacts.csv` and `checks.csv` to `Documents\Agentic Island\Reports`. It works fully without AI. See [plugins/seo-scout/README.md](plugins/seo-scout/README.md).
+- **Write your own:** a plugin is a folder with an `isla-plugin.json` and an `index.js`. See [plugins/README.md](plugins/README.md).
+- **Safety:** each run gets its own process, which the kill switch stops. A plugin's browser window has its own profile and never sees your signed-in sites. AI, web research and notifications are only available if the plugin asks for them, and secret settings (API keys) are stored encrypted. A plugin is still code on your PC, so only install plugins from people you trust.
+
 ### 🛡️ Security and control
 - **Kill switch:** the red button, the tray menu, or **Ctrl+Alt+Shift+K**. It instantly stops every agent, the screen reader, git, mail and media watchers, and wipes codes from memory and the clipboard. Everything stays paused until you click **Resume**.
 - **Shut down:** closes Isla completely (Security tab or tray).
@@ -216,6 +230,8 @@ npm run dist       # builds release/AgenticIsland-Setup-<version>.exe
 | `src/main/mailhub.ts` | Picks Gmail or IMAP for the rest of the app |
 | `src/main/usage.ts` | Token usage, plan limits, AI processes |
 | `src/main/store.ts` | Settings, DPAPI secrets, audit log |
+| `src/main/plugins/` | Plugin host: install/share, permissions, schedules, reports; `worker.ts` runs each plugin in its own process |
+| `plugins/` | Built-in plugins (one folder each), the plugin guide and `isla-plugin.d.ts` |
 | `src/renderer/` | React UI: island shell, panels, rings, media, avatar |
 | `src/shared/types.ts` | Types shared by main, preload and renderer |
 

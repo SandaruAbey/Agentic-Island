@@ -32,6 +32,8 @@ const SKIP_DIRS = /^(node_modules|\.git|\.cache|AppData|\$Recycle\.Bin|System Vo
 const APPROVAL_MS = 120_000
 /** Upper bound on tool calls in one task. */
 const MAX_STEPS = 60
+/** Key combos that are risky even after the user approved desktop control for this session (could close, delete, or do system-level damage). */
+const RISKY_KEYS = /^(alt\+f4|ctrl\+w|ctrl\+shift\+w|ctrl\+delete|ctrl\+shift\+delete|ctrl\+q|alt\+f|ctrl\+shift\+q)$/i
 
 const BRIDGE = `// Isla computer-control bridge: stdio MCP <-> Isla's local tool server. Written by Agentic Island.
 const http = require('http')
@@ -114,6 +116,8 @@ interface Session {
   /** The user allowed PC work for this request (asked at the first tool call), or refused it. */
   approved: boolean
   refused: boolean
+  /** The user approved real mouse/keyboard control for this session — safe actions auto-approve after the first OK. */
+  desktopApproved: boolean
   windows: Map<number, DeskWindow>
   elements: Map<string, DeskElement>
   screen: { scale: number; originX: number; originY: number } | null
@@ -226,6 +230,7 @@ export class ComputerControl {
       fails: 0,
       approved: !!run.preApproved,
       refused: false,
+      desktopApproved: false,
       windows: new Map(),
       elements: new Map(),
       screen: null
@@ -286,7 +291,7 @@ export class ComputerControl {
     const now = Date.now()
     const a: PendingAction = { id: randomUUID(), runId: s.runId, runTitle: s.title, summary, reason, createdAt: now, expiresAt: now + APPROVAL_MS }
     this.actions.push(a)
-    this.d.note(s.runId, `⏸ Waiting for your OK: ${summary}\n`)
+    this.d.note(s.runId, `Waiting for your OK: ${summary}\n`)
     this.d.notify({ type: 'notify', kind: 'action', title: 'Isla needs your OK', body: summary, actionId: a.id })
     this.d.onChange()
     return new Promise(res => {
@@ -544,7 +549,7 @@ export class ComputerControl {
         await sleep(Math.min(10, Math.max(1, Number(a.seconds) || 2)) * 1000)
         return text('Waited.')
 
-      // ---------------------------------------------------------------- real mouse & keyboard (last resort, always confirmed)
+      // ---------------------------------------------------------------- real mouse & keyboard (last resort, confirmed once per session — risky combos still ask)
       case 'screen_screenshot': {
         note('Looking at your screen')
         const img = await this.desk.screen()
@@ -563,7 +568,11 @@ export class ComputerControl {
         if (!Number.isFinite(x) || !Number.isFinite(y)) return fail('x and y must be numbers.')
         const w = a.window ? await this.pickWindow(s, a.window) : null
         const what = `Use your mouse: ${a.double ? 'double-' : ''}${a.button === 'right' ? 'right-' : ''}click at (${Math.round(x)}, ${Math.round(y)})${w ? ` in ${w.process || w.title}` : ''}`
-        if (!(await this.confirm(s, what, 'This takes over your real mouse for a moment.'))) return denied(what)
+        // After the first desktop approval, clicks auto-approve (the user already sees what is on screen).
+        if (!s.desktopApproved) {
+          if (!(await this.confirm(s, what, 'This takes over your real mouse for a moment. After you approve, similar safe actions will not ask again.'))) return denied(what)
+          s.desktopApproved = true
+        }
         note(what)
         if (w) await this.desk.focus(w.hwnd)
         await this.desk.clickAt(Math.round(s.screen.originX + x / s.screen.scale), Math.round(s.screen.originY + y / s.screen.scale), a.button === 'right' ? 'right' : 'left', a.double === true)
@@ -573,8 +582,12 @@ export class ComputerControl {
       case 'desktop_type': {
         const t = String(a.text ?? '').slice(0, 5000)
         const w = a.window ? await this.pickWindow(s, a.window) : null
-        const what = `Use your keyboard: type “${t.slice(0, 60)}${t.length > 60 ? '…' : ''}”${w ? ` in ${w.process || w.title}` : ''}`
-        if (!(await this.confirm(s, what, 'This types with your real keyboard into the window in front.'))) return denied(what)
+        const what = `Use your keyboard: type "${t.slice(0, 60)}${t.length > 60 ? '...' : ''}"${w ? ` in ${w.process || w.title}` : ''}`
+        // Typing text is safe — auto-approve after the first desktop approval.
+        if (!s.desktopApproved) {
+          if (!(await this.confirm(s, what, 'This types with your real keyboard into the window in front. After you approve, similar safe actions will not ask again.'))) return denied(what)
+          s.desktopApproved = true
+        }
         note(what)
         if (w) await this.desk.focus(w.hwnd)
         await this.desk.keys(sendKeysText(t))
@@ -584,8 +597,15 @@ export class ComputerControl {
         const keys = toSendKeys(String(a.keys ?? ''))
         if (!keys) return fail('Unknown key. Use e.g. "enter", "tab", "ctrl+s", "alt+f4".')
         const w = a.window ? await this.pickWindow(s, a.window) : null
-        const what = `Use your keyboard: press ${String(a.keys).slice(0, 40)}${w ? ` in ${w.process || w.title}` : ''}`
-        if (!(await this.confirm(s, what, 'This presses keys on your real keyboard.'))) return denied(what)
+        const combo = String(a.keys ?? '').trim()
+        const what = `Use your keyboard: press ${combo.slice(0, 40)}${w ? ` in ${w.process || w.title}` : ''}`
+        // Risky key combos (alt+f4, ctrl+delete, etc.) always ask, even after batch approval.
+        // Safe keys (tab, enter, arrows, ctrl+s, etc.) auto-approve after the first desktop approval.
+        const isRiskyCombo = RISKY_KEYS.test(combo)
+        if (isRiskyCombo || !s.desktopApproved) {
+          if (!(await this.confirm(s, what, isRiskyCombo ? 'This key combo could close or delete something.' : 'This presses keys on your real keyboard. After you approve, similar safe actions will not ask again.'))) return denied(what)
+          if (!isRiskyCombo) s.desktopApproved = true
+        }
         note(what)
         if (w) await this.desk.focus(w.hwnd)
         await this.desk.keys(keys)

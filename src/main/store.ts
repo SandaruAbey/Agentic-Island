@@ -49,7 +49,7 @@ export const defaultSettings: Settings = {
     clipboardClearSeconds: 45
   },
   proactive: { enabled: true },
-  launchAtLogin: false,
+  launchAtLogin: true,
   appPermissions: [],
   computer: { enabled: true, realInput: true },
   assistant: {

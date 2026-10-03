@@ -30,6 +30,9 @@ extraResources:
     to: icon.png
   - from: LICENSE
     to: LICENSE.txt
+  # Built-in plugins (each folder has an isla-plugin.json). Users install more into %APPDATA%\Agentic Island\plugins.
+  - from: plugins
+    to: plugins
   # Optional: your Google "Desktop app" OAuth client for "Sign in with Google" (see README).
   - from: build
     to: .

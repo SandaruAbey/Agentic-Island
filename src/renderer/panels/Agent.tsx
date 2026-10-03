@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AgentRun, IslandSnapshot } from '@shared/types'
-import { Icon, fmtTokens, shortPath, timeAgo, cleanErr } from '../components/ui'
+import { Icon, Shimmer, fmtTokens, shortPath, timeAgo, cleanErr } from '../components/ui'
 import { Markdown, toPlainText } from '../components/Markdown'
 
 const STATUS_LABEL: Record<AgentRun['status'], string> = {
@@ -55,7 +55,7 @@ export function RunCard({ run, snap, open, onToggle, chat = false }: { run: Agen
     <article className={`run ${run.status} ${chat ? 'chat' : ''}`}>
       {!chat && (
         <button className="run-head" onClick={onToggle} disabled={!onToggle}>
-          <span className={`status-pill ${run.status}`}>{STATUS_LABEL[run.status]}</span>
+          <span className={`status-pill ${run.status}`}>{run.status === 'running' ? <Shimmer tint>{STATUS_LABEL.running}</Shimmer> : STATUS_LABEL[run.status]}</span>
           <strong>{run.title}</strong>
           <span className="muted">{timeAgo(run.startedAt)}</span>
         </button>
@@ -63,7 +63,7 @@ export function RunCard({ run, snap, open, onToggle, chat = false }: { run: Agen
       {(isOpen || chat) && (
         <div className="run-body">
           <div className={`meta ${chat ? 'chat-meta' : ''}`}>
-            {chat && <span className={`status-pill ${run.status}`}>{STATUS_LABEL[run.status]}</span>}
+            {chat && <span className={`status-pill ${run.status}`}>{run.status === 'running' ? <Shimmer tint>{STATUS_LABEL.running}</Shimmer> : STATUS_LABEL[run.status]}</span>}
             {chat && run.computer && <span className="warn">PC task</span>}
             <span>{run.context === 'general' ? 'General' : shortPath(run.workspace)}</span>
             <span>{label}</span>
@@ -236,7 +236,7 @@ function ChatAnswer({ run, snap, label }: { run: AgentRun; snap: IslandSnapshot;
       <div className="chat-foot">
         <span className={`chat-dot ${run.status}`} />
         <span className="chat-foot-meta">
-          {STATUS_LABEL[run.status]} · {label}
+          {run.status === 'running' ? <Shimmer tint>{STATUS_LABEL.running}</Shimmer> : STATUS_LABEL[run.status]} · {label}
           {run.model ? ` · ${run.model}` : ''}
           {run.computer && /(^|\n)▸ /.test(run.output) ? ' · used your PC' : ''}
         </span>
@@ -283,7 +283,7 @@ function Output({ run, chat = false }: { run: AgentRun; chat?: boolean }) {
       {run.output ? (
         <Markdown text={run.output} previews={run.status !== 'running'} />
       ) : run.status === 'running' ? (
-        <span className="thinking">Thinking</span>
+        <Shimmer icon="spark">Thinking…</Shimmer>
       ) : (
         <span className="muted">(no output)</span>
       )}

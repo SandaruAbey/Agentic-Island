@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DockState, IslandEvent, IslandSnapshot, MediaState, PanelId } from '@shared/types'
 import { IslaAvatar, type IslaAnimation } from './avatar'
-import { Icon, chime, cleanErr, joinLabel } from './components/ui'
+import { Icon, chime, cleanErr, joinLabel, Shimmer } from './components/ui'
 import { BudsRing, UsageRings } from './components/Rings'
 import { MediaPill, isPlaying } from './components/Media'
 import { SUGGEST_FACE, actOn, actionLabel } from './suggest'
@@ -12,6 +12,7 @@ import { MailPanel } from './panels/Mail'
 import { MeetingsPanel, fmtDuration } from './panels/Meetings'
 import { UsagePanel } from './panels/Usage'
 import { SchedulerPanel } from './panels/Scheduler'
+import { PluginsPanel } from './panels/Plugins'
 import { SettingsPanel } from './panels/Settings'
 import { SecurityPanel } from './panels/Security'
 
@@ -28,6 +29,7 @@ const TABS: { id: PanelId; icon: string; label: string }[] = [
   { id: 'meetings', icon: 'rec', label: 'Recordings' },
   { id: 'usage', icon: 'usage', label: 'AI usage' },
   { id: 'scheduler', icon: 'clock', label: 'Scheduler' },
+  { id: 'plugins', icon: 'plugin', label: 'Plugins' },
   { id: 'settings', icon: 'settings', label: 'Settings' },
   { id: 'security', icon: 'shield', label: 'Security' }
 ]
@@ -498,7 +500,7 @@ export function App() {
             ) : snap.meeting.phase === 'processing' ? (
               <span className="rec-pill working" title={snap.meeting.step ?? 'Summarizing'}>
                 <span className="spinner small" />
-                {!vertical && <span>Summarizing…</span>}
+                {!vertical && <Shimmer tint>Summarizing…</Shimmer>}
               </span>
             ) : null}
             {mediaMode && media ? (
@@ -508,7 +510,7 @@ export function App() {
               </>
             ) : (
             <>
-            {!vertical && <span className="compact-text">{status}</span>}
+            {!vertical && <span className="compact-text">{running.length && !locked ? <Shimmer>{status}</Shimmer> : status}</span>}
             {vertical && rings.length === 0 && <span className="compact-spacer" />}
             <UsageRings limits={rings} size={RING - 6} />
             {!vertical && !rings.length && snap.screen && !snap.screen.skipped && !locked && (
@@ -575,7 +577,7 @@ export function App() {
             <IslaAvatar animation={animation} size={52} className={facingLeft ? 'face-left' : ''} />
             <div className="peek-text">
               <strong>{notice.title}</strong>
-              <span className={notice.kind === 'otp' ? 'otp-inline' : ''}>{peekMsg ?? notice.body}</span>
+              <span className={notice.kind === 'otp' ? 'otp-inline' : ''}>{peekMsg?.endsWith('…') ? <Shimmer>{peekMsg}</Shimmer> : peekMsg ?? notice.body}</span>
             </div>
             {notice.kind === 'approval' && notice.runId ? (
               snap.runs.some(r => r.id === notice.runId && r.status === 'pending-approval') ? (
@@ -822,7 +824,7 @@ export function App() {
                 window.clearTimeout(noticeTimer.current)
                 setNotice(null)
                 setFromNotice(true)
-                open(notice.kind === 'security' ? 'security' : 'agent')
+                open(notice.panel ?? (notice.kind === 'security' ? 'security' : 'agent'))
               }}>
                 Open
               </button>
@@ -866,6 +868,7 @@ export function App() {
                       <i className="badge blue">{snap.otps.length || snap.inbox.filter(m => m.unread).length}</i>
                     )}
                     {t.id === 'scheduler' && snap.scheduledTasks.some(x => x.lastRunStatus === 'error') && <i className="badge">!</i>}
+                    {t.id === 'plugins' && snap.plugins.some(x => x.running) && <i className="badge blue">•</i>}
                   </button>
                 ))}
               </nav>
@@ -906,6 +909,7 @@ export function App() {
               {panel === 'mail' && <MailPanel key={mailUid ?? 'inbox'} snap={snap} open={open} initialUid={mailUid} />}
               {panel === 'usage' && <UsagePanel limits={snap.limits} />}
               {panel === 'scheduler' && <SchedulerPanel snap={snap} onTyping={setTyping} />}
+              {panel === 'plugins' && <PluginsPanel snap={snap} onTyping={setTyping} />}
               {panel === 'settings' && <SettingsPanel snap={snap} onTyping={setTyping} />}
               {panel === 'security' && <SecurityPanel snap={snap} />}
             </main>

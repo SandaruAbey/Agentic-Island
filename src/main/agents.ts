@@ -449,7 +449,7 @@ export class AgentManager {
           run.output = r.text.trim()
           if (run.status === 'running') run.status = 'done'
         } else {
-          run.output = `⚠ ${PROVIDERS[provider].label} returned no answer (model ${effectiveModel || 'default'}). Try again, or pick another model in Settings → Agents & models.`
+          run.output = `[!] ${PROVIDERS[provider].label} returned no answer (model ${effectiveModel || 'default'}). Try again, or pick another model in Settings → Agents & models.`
           if (run.status === 'running') run.status = 'error'
         }
       })
@@ -615,10 +615,10 @@ export class AgentManager {
     })
     child.stderr?.on('data', (d: Buffer) => {
       const t = d.toString('utf8')
-      append(`⚠ ${t}`)
+      append(`[!] ${t}`)
     })
     const timer = setTimeout(() => this.cancel(run.id, 'timeout'), MAX_RUN_MS)
-    child.on('error', err => append(`\n⚠ ${err.message}\n`))
+    child.on('error', err => append(`\n[!] ${err.message}\n`))
     child.on('close', code => {
       clearTimeout(timer)
       finish()
@@ -627,11 +627,11 @@ export class AgentManager {
       if (run.status === 'running') run.status = code === 0 ? 'done' : 'error'
       if (run.status === 'done' && HEADLESS_DENIED.test(run.output)) run.status = 'error'
       if (run.computer && HEADLESS_DENIED.test(run.output)) {
-        append('\n💡 The agent tried a tool that Isla does not allow in PC tasks (like a shell command) instead of Isla’s own tools. Ask again in simpler steps, or pick a stronger model in Settings → Agents & models.\n')
+        append('\nNote: The agent tried a tool that Isla does not allow in PC tasks (like a shell command) instead of Isla’s own tools. Ask again in simpler steps, or pick a stronger model in Settings → Agents & models.\n')
       }
       if (run.status === 'error' && !run.output.trim()) run.output = `Exited with code ${code}.`
       const hint = signInHint(run.provider, run.output) ?? quotaHint(run.provider, run.model, run.output)
-      if (run.status === 'error' && hint) append(`\n💡 ${hint}\n`)
+      if (run.status === 'error' && hint) append(`\nNote: ${hint}\n`)
       run.endedAt = Date.now()
       this.log(`run.${run.status}`, `${run.title} (exit ${code})`)
       this.onFinish(run)
@@ -808,7 +808,7 @@ export class AgentManager {
       }
       return ''
     }
-    if (j.type === 'error' || j.type === 'turn.failed') return `⚠ ${j.message ?? j.error?.message ?? 'error'}\n`
+    if (j.type === 'error' || j.type === 'turn.failed') return `[!] ${j.message ?? j.error?.message ?? 'error'}\n`
     return ''
   }
 

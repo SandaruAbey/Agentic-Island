@@ -345,8 +345,17 @@ export class MeetingManager {
     const app0 = appName || callApp || 'Screen'
     const started = new Date()
     const stamp = `${started.getFullYear()}-${String(started.getMonth() + 1).padStart(2, '0')}-${String(started.getDate()).padStart(2, '0')} ${String(started.getHours()).padStart(2, '0')}${String(started.getMinutes()).padStart(2, '0')}`
-    const folder = join(app.getPath('videos'), 'Agentic Island', 'Meetings', `${stamp} ${app0.replace(/[\\/:*?"<>|()]/g, '').trim()}`)
-    mkdirSync(folder, { recursive: true })
+    let folder = join(app.getPath('videos'), 'Agentic Island', 'Meetings', `${stamp} ${app0.replace(/[\\/:*?"<>|()]/g, '').trim()}`)
+    try {
+      mkdirSync(folder, { recursive: true })
+    } catch (err: any) {
+      if (err?.code === 'EPERM' || err?.code === 'EACCES') {
+        folder = join(app.getPath('userData'), 'meetings', `${stamp} ${app0.replace(/[\\/:*?"<>|()]/g, '').trim()}`)
+        mkdirSync(folder, { recursive: true })
+      } else {
+        throw err
+      }
+    }
     const settings = this.d.settings()
     const rec: MeetingRecord = {
       id: randomUUID(),

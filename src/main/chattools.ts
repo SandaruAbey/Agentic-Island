@@ -105,34 +105,34 @@ export async function runChatTool(text: string, d: ChatToolDeps): Promise<string
   switch (call.tool) {
     case 'record_start': {
       const r = await rec.record()
-      return r.ok ? `🔴 ${r.message} Say “stop recording” when you’re done.` : r.message
+      return r.ok ? `${r.message} Say “stop recording” when you’re done.` : r.message
     }
     case 'record_stop':
       if (rec.state.phase !== 'recording') return 'Nothing is being recorded.'
       void rec.stop('Stopped by you')
-      return '⏹ Stopped. Saving the recording — I’ll pop up when it’s ready.'
+      return 'Stopped. Saving the recording — I’ll pop up when it’s ready.'
     case 'record_status':
-      return rec.state.phase === 'recording' ? `🔴 Yes — recording${rec.state.app ? ` (${rec.state.app})` : ''}.` : 'No, nothing is being recorded right now.'
+      return rec.state.phase === 'recording' ? `Yes — recording${rec.state.app ? ` (${rec.state.app})` : ''}.` : 'No, nothing is being recorded right now.'
     case 'recordings_list': {
       if (!rec.list.length) return 'No recordings yet. Say “record this meeting” to start one.'
       return `Your latest recordings:\n${rec.list
         .slice(0, 6)
-        .map(m => `• ${m.kind === 'meeting' ? '🎙' : '🖥'} **${clip(m.title, 50)}** — ${ago(m.startedAt)}${m.status === 'done' ? ' · summarized' : ''}`)
+        .map(m => `• [${m.kind === 'meeting' ? 'Meeting' : 'Screen'}] **${clip(m.title, 50)}** — ${ago(m.startedAt)}${m.status === 'done' ? ' · summarized' : ''}`)
         .join('\n')}\n\nOpen the Recordings tab to play or summarize them.`
     }
     case 'recording_open':
       if (!latest) return 'No recordings yet.'
       rec.open(latest.id)
-      return `📂 Opened the folder of “${clip(latest.title, 50)}”.`
+      return `Opened the folder of “${clip(latest.title, 50)}”.`
     case 'recording_play':
       if (!latest) return 'No recordings yet.'
       rec.play(latest.id)
-      return `▶️ Playing “${clip(latest.title, 50)}”.`
+      return `Playing “${clip(latest.title, 50)}”.`
     case 'recording_summarize':
       if (!latest) return 'No recordings yet.'
       if (latest.status === 'done') return `“${clip(latest.title, 50)}” is already summarized — say “last meeting summary”.`
       void rec.process(latest.id, true)
-      return `⏳ Transcribing and summarizing “${clip(latest.title, 50)}” — I’ll pop up when it’s ready.`
+      return `Transcribing and summarizing “${clip(latest.title, 50)}” — I’ll pop up when it’s ready.`
     case 'recording_summary': {
       if (!latest) return 'No recordings yet.'
       if (latest.status !== 'done') return `“${clip(latest.title, 50)}” isn’t summarized yet. Say “summarize the last recording” and I’ll do it.`
@@ -142,7 +142,7 @@ export async function runChatTool(text: string, d: ChatToolDeps): Promise<string
     case 'task_list': {
       const tasks = d.tasks.list()
       if (!tasks.length) return 'No scheduled tasks. Try: “every morning at 9 search AI news and summarize it”.'
-      return `Scheduled tasks:\n${tasks.map(t => `• ${t.enabled ? '🟢' : '⏸'} **${clip(t.title, 50)}** — ${describeRecurrence(t.recurrence)}`).join('\n')}`
+      return `Scheduled tasks:\n${tasks.map(t => `• [${t.enabled ? 'Active' : 'Paused'}] **${clip(t.title, 50)}** — ${describeRecurrence(t.recurrence)}`).join('\n')}`
     }
     case 'task_pause':
     case 'task_resume':
@@ -158,12 +158,12 @@ export async function runChatTool(text: string, d: ChatToolDeps): Promise<string
         else d.tasks.toggle(t.id, call.tool === 'task_resume')
       }
       const names = hits.map(t => `“${clip(t.title, 40)}”`).join(', ')
-      return call.tool === 'task_delete' ? `🗑 Deleted ${names}.` : call.tool === 'task_pause' ? `⏸ Paused ${names}.` : `▶️ Resumed ${names}.`
+      return call.tool === 'task_delete' ? `Deleted ${names}.` : call.tool === 'task_pause' ? `Paused ${names}.` : `Resumed ${names}.`
     }
     case 'commit_review': {
       const p = await d.reviewChanges()
       if (!p) return 'No uncommitted changes to review (or no project is selected).'
-      return `${p.ok ? '✅ Looks good' : '⚠️ Check before committing'} — ${p.files.length} file(s)\nSuggested message: \`${p.message}\`${p.issues.length ? `\n${p.issues.map(i => `• ${i}`).join('\n')}` : ''}\n\nUse the Commit & push button on the pill when you’re ready.`
+      return `${p.ok ? 'Looks good' : 'Check before committing'} — ${p.files.length} file(s)\nSuggested message: \`${p.message}\`${p.issues.length ? `\n${p.issues.map(i => `• ${i}`).join('\n')}` : ''}\n\nUse the Commit & push button on the pill when you’re ready.`
     }
   }
   return null

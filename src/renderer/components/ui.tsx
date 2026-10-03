@@ -41,15 +41,30 @@ const PATHS: Record<string, string> = {
   clock: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16zm-1 2h2v6.4l4.2 2.5-1 1.7L11 13V6z',
   file: 'M6 2h8l6 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V9h5.5z',
   buds: 'M7 2.5a4.5 4.5 0 0 1 4.5 4.5v.2a4.5 4.5 0 0 1-1 2.6V20a1.75 1.75 0 0 1-3.5 0v-8.6A4.5 4.5 0 0 1 2.5 7 4.5 4.5 0 0 1 7 2.5zm10 0A4.5 4.5 0 0 1 21.5 7 4.5 4.5 0 0 1 17 11.4V20a1.75 1.75 0 0 1-3.5 0V9.8a4.5 4.5 0 0 1-1-2.6V7A4.5 4.5 0 0 1 17 2.5zM7 5a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm10 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z',
+  plugin: 'M10 3a2 2 0 0 1 4 0v2h4a1 1 0 0 1 1 1v4h-2a2 2 0 0 0 0 4h2v4a1 1 0 0 1-1 1h-4v-2a2 2 0 0 0-4 0v2H6a1 1 0 0 1-1-1v-4h2a2 2 0 0 0 0-4H5V6a1 1 0 0 1 1-1h4z',
+  terminal: 'M3 4h18a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v12h16V6zm2.4 2L5 9.4 7.6 12 5 14.6 6.4 16l4-4zM12 14h6v2h-6z',
   search: 'M10 3a7 7 0 0 1 5.6 11.2l5.1 5.1-1.4 1.4-5.1-5.1A7 7 0 1 1 10 3zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10z'
 }
-const EVENODD = new Set(['mail', 'eye', 'search', 'clock', 'buds'])
+const EVENODD = new Set(['mail', 'eye', 'search', 'clock', 'buds', 'terminal'])
 
 export function Icon({ name, size = 16, className }: { name: string; size?: number; className?: string }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden="true">
       <path d={PATHS[name] ?? PATHS.spark} fill="currentColor" fillRule={EVENODD.has(name) ? 'evenodd' : undefined} />
     </svg>
+  )
+}
+
+/**
+ * "Working" text with a soft light sweeping left → right (thinking, running, loading…).
+ * `tint` keeps the surrounding colour (e.g. inside a green status pill) instead of the white-on-grey look.
+ */
+export function Shimmer({ children, icon, tint = false, className = '' }: { children: ReactNode; icon?: string; tint?: boolean; className?: string }) {
+  return (
+    <span className={`shimmer${tint ? ' tint' : ''}${className ? ` ${className}` : ''}`}>
+      {icon && <Icon name={icon} size={12} />}
+      {children}
+    </span>
   )
 }
 

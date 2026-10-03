@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { IslandSnapshot, MeetingRecord, ScreenSource } from '@shared/types'
-import { Icon, Toggle, cleanErr, timeAgo } from '../components/ui'
+import { Icon, Shimmer, Toggle, cleanErr, timeAgo } from '../components/ui'
 
 export const fmtDuration = (ms: number) => {
   const s = Math.max(0, Math.floor(ms / 1000))
@@ -42,7 +42,7 @@ export function MeetingsPanel({ snap, initialId, onTyping }: { snap: IslandSnaps
             {m.phase === 'recording'
               ? 'Your screen and sound are being recorded (Isla itself is hidden from the video).'
               : m.phase === 'processing'
-                ? (m.step ?? 'Working…')
+                ? <Shimmer icon="spark">{m.step ?? 'Working…'}</Shimmer>
                 : s.autoDetect
                   ? 'Record your screen any time. In a Teams / Zoom / Meet call Isla asks first, and summarizes the meeting when it ends.'
                   : 'Record your screen any time. Meeting detection is off.'}
@@ -95,7 +95,7 @@ export function MeetingsPanel({ snap, initialId, onTyping }: { snap: IslandSnaps
             <li key={r.id}>
               <button onClick={() => setOpenId(r.id)}>
                 <span className={`meet-badge ${r.status} ${r.kind}`}>
-                  {r.status === 'done' ? 'Summary' : r.status === 'processing' ? 'Working…' : r.status === 'error' ? 'Failed' : r.kind === 'screen' ? 'Video' : 'Meeting'}
+                  {r.status === 'done' ? 'Summary' : r.status === 'processing' ? <Shimmer tint>Working…</Shimmer> : r.status === 'error' ? 'Failed' : r.kind === 'screen' ? 'Video' : 'Meeting'}
                 </span>
                 <strong>{r.title}</strong>
                 <span className="muted small">
@@ -144,7 +144,7 @@ function RecordPicker({ snap, onClose }: { snap: IslandSnapshot; onClose: () => 
       </div>
       <div className="screen-grid">
         {screens === null ? (
-          <span className="muted small">Looking for screens…</span>
+          <Shimmer className="small">Looking for screens…</Shimmer>
         ) : (
           screens.map(sc => (
             <button key={sc.displayId} className={`screen-opt ${picked.includes(sc.displayId) ? 'on' : ''}`} onClick={() => toggle(sc.displayId)}>
@@ -244,7 +244,7 @@ function MeetingDetail({ id, onBack, snap }: { id: string; onBack: () => void; s
   useEffect(() => {
     void window.island.getMeeting(id).then(setRec)
   }, [id, live?.status])
-  if (!rec) return <div className="empty">Loading…</div>
+  if (!rec) return <div className="empty"><Shimmer>Loading…</Shimmer></div>
 
   const asText = () =>
     [
@@ -257,7 +257,7 @@ function MeetingDetail({ id, onBack, snap }: { id: string; onBack: () => void; s
       ...(rec.decisions.length ? rec.decisions.map(x => `• ${x}`) : ['• (none)']),
       '',
       'Action items:',
-      ...(rec.actionItems.length ? rec.actionItems.map(a => `☐ ${a.task}${a.owner ? ` — ${a.owner}` : ''}${a.due ? ` (due ${a.due})` : ''}`) : ['☐ (none)'])
+      ...(rec.actionItems.length ? rec.actionItems.map(a => `[ ] ${a.task}${a.owner ? ` — ${a.owner}` : ''}${a.due ? ` (due ${a.due})` : ''}`) : ['[ ] (none)'])
     ].join('\n')
 
   return (
@@ -340,7 +340,7 @@ function MeetingDetail({ id, onBack, snap }: { id: string; onBack: () => void; s
                 <ul className="actions-list">
                   {rec.actionItems.map((a, i) => (
                     <li key={i}>
-                      <span>☐ {a.task}</span>
+                      <span>[ ] {a.task}</span>
                       {a.owner && <b>{a.owner}</b>}
                       {a.due && <em>{a.due}</em>}
                     </li>

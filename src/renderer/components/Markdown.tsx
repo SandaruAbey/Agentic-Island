@@ -50,8 +50,8 @@ function parseBlocks(src: string): Block[] {
       else out.push({ kind: 'tools', items: [t.slice(2)] })
       continue
     }
-    if (t.startsWith('⚠')) {
-      out.push({ kind: 'warn', text: t.replace(/^⚠\s*/, '') })
+    if (t.startsWith('⚠') || t.startsWith('[!]')) {
+      out.push({ kind: 'warn', text: t.replace(/^(?:⚠|\[!\])\s*/, '') })
       continue
     }
     const h = t.match(/^(#{1,6})\s+(.*)$/)
@@ -292,7 +292,7 @@ export function toPlainText(md: string): string {
   return md
     .replace(/\r\n?/g, '\n')
     .split('\n')
-    .filter(l => !/^\s*(▸ |⚠|⏸)/.test(l) && !/^\s*```/.test(l) && !TOOL_TAG.test(l))
+    .filter(l => !/^\s*(▸ |⚠|\[!\]|⏸)/.test(l) && !/^\s*```/.test(l) && !TOOL_TAG.test(l))
     .map(l =>
       l
         .replace(/^\s*#{1,6}\s+/, '')

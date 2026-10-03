@@ -19,7 +19,9 @@ const cspPlugin = (): Plugin => ({
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
-    resolve: { alias: { '@shared': resolve('src/shared') } }
+    resolve: { alias: { '@shared': resolve('src/shared') } },
+    // plugin-worker: runs one plugin tool in its own utility process (see src/main/plugins).
+    build: { rollupOptions: { input: { index: resolve('src/main/index.ts'), 'plugin-worker': resolve('src/main/plugins/worker.ts') } } }
   },
   preload: {
     plugins: [externalizeDepsPlugin()],

@@ -37,7 +37,7 @@ export function googleSignIn(client: GoogleClient): Promise<{ refreshToken: stri
       const done = (ok: boolean, msg: string) => {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
         res.end(
-          `<!doctype html><meta charset="utf-8"><title>Agentic Island</title><body style="font-family:system-ui;background:#000;color:#f5f5f7;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center"><h2>${ok ? '✅ Gmail connected' : '⚠️ Sign-in failed'}</h2><p style="color:#8e8e93">${msg}</p></div></body>`
+          `<!doctype html><meta charset="utf-8"><title>Agentic Island</title><body style="font-family:system-ui;background:#000;color:#f5f5f7;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center"><h2>${ok ? 'Gmail connected' : 'Sign-in failed'}</h2><p style="color:#8e8e93">${msg}</p></div></body>`
         )
         clearTimeout(timer)
         server.close()
