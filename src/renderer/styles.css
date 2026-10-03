@@ -3264,6 +3264,17 @@ button.chip:hover {
 .plugin-tool p {
   margin: 4px 0 0;
 }
+.plugin-run-prompt {
+  margin-top: 10px;
+  padding: 12px;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.plugin-run-prompt em {
+  font-style: normal;
+  line-height: 1.35;
+}
 .plugin-schedule {
   margin-top: 8px;
   gap: 8px;

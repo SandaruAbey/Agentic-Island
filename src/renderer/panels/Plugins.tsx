@@ -274,6 +274,41 @@ function ToolRow({ p, tool, focus, disabled, onError }: { p: PluginInfo; tool: P
   const [time, setTime] = useState(timeOf(rec))
   const [weekday, setWeekday] = useState(rec.type === 'weekly' ? rec.weekday : 1)
 
+  const isSeoScout = p.manifest.id === 'seo-scout'
+  const [prompting, setPrompting] = useState(false)
+  const [businessType, setBusinessType] = useState(String(p.values.businessType ?? ''))
+  const [cities, setCities] = useState(String(p.values.cities ?? ''))
+  const [country, setCountry] = useState(String(p.values.country ?? ''))
+  const [perCity, setPerCity] = useState(Number(p.values.perCity ?? 20))
+  const [starting, setStarting] = useState(false)
+
+  useEffect(() => {
+    setBusinessType(String(p.values.businessType ?? ''))
+    setCities(String(p.values.cities ?? ''))
+    setCountry(String(p.values.country ?? ''))
+    setPerCity(Number(p.values.perCity ?? 20))
+  }, [p.values.businessType, p.values.cities, p.values.country, p.values.perCity])
+
+  const startRun = async () => {
+    setStarting(true)
+    try {
+      if (isSeoScout) {
+        await window.island.setPluginValues(p.manifest.id, {
+          businessType: businessType.trim(),
+          cities: cities.trim(),
+          country: country.trim(),
+          perCity: Number(perCity) || 20
+        })
+      }
+      setPrompting(false)
+      await window.island.runPlugin(p.manifest.id, tool.id)
+    } catch (e) {
+      onError(e)
+    } finally {
+      setStarting(false)
+    }
+  }
+
   const save = (enabled: boolean, t = type, tm = time, wd = weekday) => {
     const [h, mi] = tm.split(':').map(Number)
     const recurrence: TaskRecurrence = t === 'weekly' ? { type: 'weekly', weekday: wd, hour: h || 0, minute: mi || 0 } : { type: 'daily', hour: h || 0, minute: mi || 0 }
@@ -286,12 +321,111 @@ function ToolRow({ p, tool, focus, disabled, onError }: { p: PluginInfo; tool: P
     <div className="plugin-tool">
       <div className="row-between">
         <strong>{tool.title}</strong>
-        <button className="btn ghost" disabled={disabled} onClick={() => void window.island.runPlugin(p.manifest.id, tool.id).catch(onError)}>
-          <Icon name="play" size={13} /> Run now
-        </button>
+        {!prompting && (
+          <button
+            className="btn ghost"
+            disabled={disabled}
+            onClick={() => {
+              if (isSeoScout) {
+                setPrompting(true)
+              } else {
+                void window.island.runPlugin(p.manifest.id, tool.id).catch(onError)
+              }
+            }}
+          >
+            <Icon name="play" size={13} /> Run now
+          </button>
+        )}
       </div>
       {tool.description && <p className="muted small">{tool.description}</p>}
       {chatHint && <p className="muted small">In chat: “{chatHint}”</p>}
+
+      {prompting && (
+        <div className="plugin-run-prompt">
+          <div className="row-between" style={{ marginBottom: 6 }}>
+            <span className="small" style={{ fontWeight: 600, color: 'var(--text)' }}>
+              <Icon name="play" size={12} /> Run {p.manifest.name}
+            </span>
+            <button className="link" onClick={() => setPrompting(false)} title="Close">
+              <Icon name="close" size={12} />
+            </button>
+          </div>
+          <p className="muted small" style={{ margin: '0 0 10px' }}>
+            Enter target business and locations for this run, or leave blank to search near you.
+          </p>
+          <div className="provider-grid" style={{ marginTop: 0 }}>
+            <label className="wide">
+              <span>Business type</span>
+              <input
+                value={businessType}
+                placeholder="Anything: dentist, hotel, restaurant, school… (Empty = any)"
+                spellCheck={false}
+                autoFocus
+                {...focus}
+                onChange={e => setBusinessType(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') void startRun()
+                  if (e.key === 'Escape') setPrompting(false)
+                }}
+              />
+              <em className="muted small">Anything: dentist, hotel, restaurant, school… Empty = any business.</em>
+            </label>
+            <label className="wide">
+              <span>Cities</span>
+              <input
+                value={cities}
+                placeholder="Comma separated: Colombo, Kandy… (Empty = near you)"
+                spellCheck={false}
+                {...focus}
+                onChange={e => setCities(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') void startRun()
+                  if (e.key === 'Escape') setPrompting(false)
+                }}
+              />
+              <em className="muted small">Comma separated. Empty = near you. In chat: “seo scout dentists in Colombo and Kandy”.</em>
+            </label>
+            <label>
+              <span>Country</span>
+              <input
+                value={country}
+                placeholder="e.g. Sri Lanka"
+                spellCheck={false}
+                {...focus}
+                onChange={e => setCountry(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') void startRun()
+                  if (e.key === 'Escape') setPrompting(false)
+                }}
+              />
+            </label>
+            <label>
+              <span>Max websites per city</span>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={perCity}
+                {...focus}
+                onChange={e => setPerCity(Number(e.target.value) || 20)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') void startRun()
+                  if (e.key === 'Escape') setPrompting(false)
+                }}
+              />
+            </label>
+          </div>
+          <div className="actions" style={{ marginTop: 12 }}>
+            <button className="btn ghost" disabled={starting} onClick={() => setPrompting(false)}>
+              Cancel
+            </button>
+            <span className="spacer" />
+            <button className="btn primary" disabled={disabled || starting} onClick={() => void startRun()}>
+              <Icon name="play" size={13} /> {starting ? 'Starting…' : 'Start Run'}
+            </button>
+          </div>
+        </div>
+      )}
       <div className="inline plugin-schedule">
         <Toggle label="Repeat automatically" checked={on} onChange={v => save(v)} />
         <span className="small">{on && sched?.nextRunAt && p.enabled ? `Next run ${timeUntil(sched.nextRunAt)}` : 'Repeat'}</span>
