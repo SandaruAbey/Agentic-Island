@@ -1,5 +1,4 @@
 import { basename } from 'node:path'
-import { screen } from 'electron'
 import { createHash } from 'node:crypto'
 import type { ActivityContext, BackgroundStats, CommitProposal, GitState, IslandEvent, ScreenStatus, Settings, Suggestion } from '@shared/types'
 import type { AgentManager } from './agents'
@@ -7,21 +6,7 @@ import type { ScreenReader } from './screen'
 import { diffForReview, scanSecrets } from './git'
 import { redactCodes } from './mail'
 
-// A screen capture briefly stalls Windows' graphics stack (the cursor can freeze), so the fixed timer is only a
-// slow safety net; real reads are triggered by switching windows and wait for the mouse to be still.
-const SCREEN_EVERY_MS = 90_000
-const MOUSE_STILL_MS = 700
-const MOUSE_RETRY_MS = 3_000
-
-const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
-
-/** True when the pointer has not moved for a moment — the only safe time to capture the screen. */
-async function mouseIsStill(): Promise<boolean> {
-  const a = screen.getCursorScreenPoint()
-  await sleep(MOUSE_STILL_MS)
-  const b = screen.getCursorScreenPoint()
-  return a.x === b.x && a.y === b.y
-}
+const SCREEN_EVERY_MS = 20_000
 const STABLE_BEFORE_AI_MS = 12_000
 const CHANGES_SETTLE_MS = 90_000 // 1.5 minutes
 const PEEK_COOLDOWN_MS = 4 * 60_000
@@ -219,12 +204,6 @@ export class InsightEngine {
     if (!s.screenWatch || !activity || this.busy || this.d.isLocked()) return
     this.busy = true
     try {
-      if (!(await mouseIsStill())) {
-        // Mouse is in use: don't capture now, try again shortly.
-        if (this.nudge) clearTimeout(this.nudge)
-        this.nudge = setTimeout(() => void this.tick(), MOUSE_RETRY_MS)
-        return
-      }
       const { text, skipped } = await this.d.reader.read(activity, this.d.getSettings().appPermissions)
       this.status = { app: activity.app, capturedAt: Date.now(), chars: text.length, skipped }
       if (skipped) {
